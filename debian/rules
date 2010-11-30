@@ -1,0 +1,26 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with autotools_dev
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		--enable-mysql \
+		--enable-pgsql \
+		--enable-mail \
+		--enable-imfile \
+		--enable-gssapi-krb5 \
+		--enable-gnutls \
+		--enable-relp \
+		--disable-testbench
+
+override_dh_auto_install:
+	dh_auto_install
+	install --mode=644 -D plugins/ommysql/createDB.sql debian/rsyslog-mysql/usr/share/dbconfig-common/data/rsyslog-mysql/install/mysql
+	install --mode=644 -D plugins/ompgsql/createDB.sql debian/rsyslog-pgsql/usr/share/dbconfig-common/data/rsyslog-pgsql/install/pgsql
+
+override_dh_compress:
+	dh_compress -X rsyslog-example.conf
+
+override_dh_installinit:
+	dh_installinit -R -- start 10 2 3 4 5 . start 30 0 6 . stop 90 1 .
