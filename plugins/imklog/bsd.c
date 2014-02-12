@@ -75,6 +75,7 @@
 
 #include "rsyslog.h"
 #include "imklog.h"
+#include "debug.h"
 
 /* globals */
 static int	fklog = -1;	/* /dev/klog */
@@ -85,7 +86,7 @@ static int	fklog = -1;	/* /dev/klog */
 
 static uchar *GetPath(void)
 {
-	return pszPath ? pszPath : _PATH_KLOG;
+	return pszPath ? pszPath : (uchar*) _PATH_KLOG;
 }
 
 /* open the kernel log - will be called inside the willRun() imklog
@@ -96,7 +97,7 @@ klogWillRun(void)
 {
 	DEFiRet;
 
-	fklog = open(GetPath(), O_RDONLY, 0);
+	fklog = open((char*)GetPath(), O_RDONLY, 0);
 	if (fklog < 0) {
 		dbgprintf("can't open %s (%d)\n", GetPath(), errno);
 		iRet = RS_RET_ERR; // TODO: better error code
@@ -132,7 +133,7 @@ readklog(void)
 	if((size_t) iMaxLine < sizeof(bufRcv) - 1) {
 		pRcv = bufRcv;
 	} else {
-		if((pRcv = (uchar*) malloc(sizeof(uchar) * (iMaxLine + 1))) == NULL)
+		if((pRcv = (uchar*) MALLOC(sizeof(uchar) * (iMaxLine + 1))) == NULL)
 			iMaxLine = sizeof(bufRcv) - 1; /* better this than noting */
 	}
 
@@ -152,7 +153,7 @@ readklog(void)
 			break;
 		}
 
-		for (p = pRcv; (q = strchr(p, '\n')) != NULL; p = q + 1) {
+		for (p = (char*)pRcv; (q = strchr(p, '\n')) != NULL; p = q + 1) {
 			*q = '\0';
 			Syslog(LOG_INFO, (uchar*) p);
 		}

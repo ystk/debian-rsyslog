@@ -32,6 +32,7 @@
 #include "obj.h"
 #include "syslogd-types.h"
 #include "template.h"
+#include "atomic.h"
 
 
 /* rgerhards 2004-11-08: The following structure represents a
@@ -59,15 +60,9 @@ struct msg {
 	flowControl_t flowCtlType; /**< type of flow control we can apply, for enqueueing, needs not to be persisted because
 				        once data has entered the queue, this property is no longer needed. */
 	pthread_mutex_t mut;
-	bool	bDoLock;	 /* use the mutex? */
-	bool	bParseHOSTNAME;	/* should the hostname be parsed from the message? */
-	short	iRefCount;	/* reference counter (0 = unused) */
-	   /* background: the hostname is not present on "regular" messages
-	    * received via UNIX domain sockets from the same machine. However,
-	    * it is available when we have a forwarder (e.g. rfc3195d) using local
-	    * sockets. All in all, the parser would need parse templates, that would
-	    * resolve all these issues... rgerhards, 2005-10-06
-	    */
+	int	iRefCount;	/* reference counter (0 = unused) */
+	sbool	bDoLock;	/* use the mutex? */
+	sbool	bAlreadyFreed;	/* aid to help detect a well-hidden bad bug -- TODO: remove when no longer needed */
 	short	iSeverity;	/* the severity 0..7 */
 	short	iFacility;	/* Facility code 0 .. 23*/
 	short	offAfterPRI;	/* offset, at which raw message WITHOUT PRI part starts in pszRawMsg */
@@ -95,8 +90,12 @@ struct msg {
 	cstr_t *pCSPROCID;	/* PROCID */
 	cstr_t *pCSMSGID;	/* MSGID */
 	prop_t *pInputName;	/* input name property */
-	prop_t *pRcvFrom;	/* name of system message was received from */
 	prop_t *pRcvFromIP;	/* IP of system message was received from */
+	union {
+		prop_t *pRcvFrom;/* name of system message was received from */
+		struct sockaddr_storage *pfrominet; /* unresolved name */
+	} rcvFrom;
+
 	ruleset_t *pRuleset;	/* ruleset to be used for processing this message */
 	time_t ttGenTime;	/* time msg object was generated, same as tRcvdAt, but a Unix timestamp.
 				   While this field looks redundant, it is required because a Unix timestamp
@@ -114,8 +113,8 @@ struct msg {
 		uchar	*pszTAG;	/* pointer to tag value */
 		uchar	szBuf[CONF_TAG_BUFSIZE];
 	} TAG;
-	char pszTimestamp3164[16];
-	char pszTimestamp3339[33];
+	char pszTimestamp3164[CONST_LEN_TIMESTAMP_3164 + 1];
+	char pszTimestamp3339[CONST_LEN_TIMESTAMP_3339 + 1];
 	char pszTIMESTAMP_SecFrac[7]; /* Note: a pointer is 64 bits/8 char, so this is actually fewer than a pointer! */
 	char pszRcvdAt_SecFrac[7];	     /* same as above. Both are fractional seconds for their respective timestamp */
 };
@@ -130,6 +129,9 @@ struct msg {
 #define MARK		0x008	/* this message is a mark */
 #define NEEDS_PARSING	0x010	/* raw message, must be parsed before processing can be done */
 #define PARSE_HOSTNAME	0x020	/* parse the hostname during message parsing */
+#define NEEDS_DNSRESOL	0x040	/* fromhost address is unresolved and must be locked up via DNS reverse lookup first */
+#define NEEDS_ACLCHK_U	0x080	/* check UDP ACLs after DNS resolution has been done in main queue consumer */
+#define NO_PRI_IN_RAW	0x100	/* rawmsg does not include a PRI (Solaris!), but PRI is already set correctly in the msg object */
 
 
 /* function prototypes
@@ -149,6 +151,7 @@ void MsgSetTAG(msg_t *pMsg, uchar* pszBuf, size_t lenBuf);
 void MsgSetRuleset(msg_t *pMsg, ruleset_t*);
 rsRetVal MsgSetFlowControlType(msg_t *pMsg, flowControl_t eFlowCtl);
 rsRetVal MsgSetStructuredData(msg_t *pMsg, char* pszStrucData);
+rsRetVal msgSetFromSockinfo(msg_t *pThis, struct sockaddr_storage *sa);
 void MsgSetRcvFrom(msg_t *pMsg, prop_t*);
 void MsgSetRcvFromStr(msg_t *pMsg, uchar* pszRcvFrom, int, prop_t **);
 rsRetVal MsgSetRcvFromIP(msg_t *pMsg, prop_t*);
@@ -165,19 +168,22 @@ char *textpri(char *pRes, size_t pResLen, int pri);
 rsRetVal msgGetMsgVar(msg_t *pThis, cstr_t *pstrPropName, var_t **ppVar);
 rsRetVal MsgEnableThreadSafety(void);
 uchar *getRcvFrom(msg_t *pM);
+void getTAG(msg_t *pM, uchar **ppBuf, int *piLen);
+char *getTimeReported(msg_t *pM, enum tplFormatTypes eFmt);
+char *getPRI(msg_t *pMsg);
 
 
 /* TODO: remove these five (so far used in action.c) */
 uchar *getMSG(msg_t *pM);
 char *getHOSTNAME(msg_t *pM);
-char *getPROCID(msg_t *pM, bool bLockMutex);
-char *getAPPNAME(msg_t *pM, bool bLockMutex);
+char *getPROCID(msg_t *pM, sbool bLockMutex);
+char *getAPPNAME(msg_t *pM, sbool bLockMutex);
 int getMSGLen(msg_t *pM);
 
 char *getHOSTNAME(msg_t *pM);
 int getHOSTNAMELen(msg_t *pM);
-char *getProgramName(msg_t *pM, bool bLockMutex);
-int getProgramNameLen(msg_t *pM, bool bLockMutex);
+uchar *getProgramName(msg_t *pM, sbool bLockMutex);
+int getProgramNameLen(msg_t *pM, sbool bLockMutex);
 uchar *getRcvFrom(msg_t *pM);
 rsRetVal propNameToID(cstr_t *pCSPropName, propid_t *pPropID);
 uchar *propIDToName(propid_t propID);
@@ -206,6 +212,16 @@ MsgSetRawMsgSize(msg_t *pMsg, size_t newLen)
 {
 	assert(newLen <= (size_t) pMsg->iLenRawMsg);
 	pMsg->iLenRawMsg = newLen;
+}
+
+
+/* get the ruleset that is associated with the ruleset.
+ * May be NULL. -- rgerhards, 2009-10-27
+ */
+static inline ruleset_t*
+MsgGetRuleset(msg_t *pMsg)
+{
+	return pMsg->pRuleset;
 }
 
 

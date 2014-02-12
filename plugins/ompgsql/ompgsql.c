@@ -49,6 +49,7 @@
 #include "errmsg.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -64,6 +65,8 @@ typedef struct _instanceData {
 	ConnStatusType	eLastPgSQLStatus; 	/* last status from postgres */
 } instanceData;
 
+
+static rsRetVal writePgSQL(uchar *psz, instanceData *pData);
 
 BEGINcreateInstance
 CODESTARTcreateInstance
@@ -146,8 +149,13 @@ static rsRetVal initPgSQL(instanceData *pData, int bSilent)
 
 	dbgprintf("host=%s dbname=%s uid=%s\n",pData->f_dbsrv,pData->f_dbname,pData->f_dbuid);
 
+	/* Force PostgreSQL to use ANSI-SQL conforming strings, otherwise we may
+	 * get all sorts of side effects (e.g.: backslash escapes) and warnings
+	 */
+	const char *PgConnectionOptions = "-c standard_conforming_strings=on";
+
 	/* Connect to database */
-	if((pData->f_hpgsql=PQsetdbLogin(pData->f_dbsrv, NULL, NULL, NULL,
+	if((pData->f_hpgsql=PQsetdbLogin(pData->f_dbsrv, NULL, PgConnectionOptions, NULL,
 				pData->f_dbname, pData->f_dbuid, pData->f_dbpwd)) == NULL) {
 		reportDBError(pData, bSilent);
 		closePgSQL(pData); /* ignore any error we may get */
@@ -189,7 +197,8 @@ tryExec(uchar *pszCmd, instanceData *pData)
  * a sql format error - connection aborts were properly handled
  * before my patch. -- rgerhards, 2009-04-17
  */
-rsRetVal writePgSQL(uchar *psz, instanceData *pData)
+static rsRetVal
+writePgSQL(uchar *psz, instanceData *pData)
 {
 	int bHadError = 0;
 	DEFiRet;
@@ -227,14 +236,42 @@ BEGINtryResume
 CODESTARTtryResume
 	if(pData->f_hpgsql == NULL) {
 		iRet = initPgSQL(pData, 1);
+		if(iRet == RS_RET_OK) {
+			/* the code above seems not to actually connect to the database. As such, we do a
+			 * dummy statement (a pointless select...) to verify the connection and return
+			 * success only when that statemetn succeeds. Note that I am far from being a 
+			 * PostgreSQL expert, so any patch that does the desired result in a more
+			 * intelligent way is highly welcome. -- rgerhards, 2009-12-16
+			 */
+			iRet = writePgSQL((uchar*)"select 'a' as a", pData);
+		}
+
 	}
 ENDtryResume
+
+
+BEGINbeginTransaction
+CODESTARTbeginTransaction
+dbgprintf("ompgsql: beginTransaction\n");
+	iRet = writePgSQL((uchar*) "begin", pData); /* TODO: make user-configurable */
+ENDbeginTransaction
+
 
 BEGINdoAction
 CODESTARTdoAction
 	dbgprintf("\n");
-	iRet = writePgSQL(ppString[0], pData);
+	CHKiRet(writePgSQL(ppString[0], pData));
+	if(bCoreSupportsBatching)
+		iRet = RS_RET_DEFER_COMMIT;
+finalize_it:
 ENDdoAction
+
+
+BEGINendTransaction
+CODESTARTendTransaction
+	iRet = writePgSQL((uchar*) "commit;", pData); /* TODO: make user-configurable */
+dbgprintf("ompgsql: endTransaction\n");
+ENDendTransaction
 
 
 BEGINparseSelectorAct
@@ -314,6 +351,7 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_TXIF_OMOD_QUERIES /* we support the transactional interface! */
 ENDqueryEtryPt
 
 
@@ -322,6 +360,9 @@ CODESTARTmodInit
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
+	INITChkCoreFeature(bCoreSupportsBatching, CORE_FEATURE_BATCHING);
+	DBGPRINTF("ompgsql: module compiled with rsyslog version %s.\n", VERSION);
+	DBGPRINTF("ompgsql: %susing transactional output interface.\n", bCoreSupportsBatching ? "" : "not ");
 ENDmodInit
 /* vi:set ai:
  */

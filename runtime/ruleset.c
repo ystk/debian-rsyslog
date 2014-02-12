@@ -40,22 +40,28 @@
 
 #include "rsyslog.h"
 #include "obj.h"
+#include "cfsysline.h"
 #include "msg.h"
 #include "ruleset.h"
 #include "rule.h"
 #include "errmsg.h"
+#include "parser.h"
+#include "batch.h"
 #include "unicode-helper.h"
-
-static rsRetVal debugPrintAll(void); // TODO: remove!
+#include "dirty.h" /* for main ruleset queue creation */
 
 /* static data */
 DEFobjStaticHelpers
 DEFobjCurrIf(errmsg)
 DEFobjCurrIf(rule)
+DEFobjCurrIf(parser)
 
 linkedList_t llRulesets; /* this is NOT a pointer - no typo here ;) */
 ruleset_t *pCurrRuleset = NULL; /* currently "active" ruleset */
-ruleset_t *pDfltRuleset = NULL; /* currentl default ruleset, e.g. for binding to actions which have no other */
+ruleset_t *pDfltRuleset = NULL; /* current default ruleset, e.g. for binding to actions which have no other */
+
+/* forward definitions */
+static rsRetVal processBatch(batch_t *pBatch);
 
 /* ---------- linked-list key handling functions ---------- */
 
@@ -132,38 +138,118 @@ finalize_it:
 
 
 
-/* helper to processMsg(), used to call the configured actions. It is
+/* helper to processBatch(), used to call the configured actions. It is
  * executed from within llExecFunc() of the action list.
  * rgerhards, 2007-08-02
  */
-DEFFUNC_llExecFunc(processMsgDoRules)
+DEFFUNC_llExecFunc(processBatchDoRules)
 {
+	rsRetVal iRet;
 	ISOBJ_TYPE_assert(pData, rule);
-	return rule.ProcessMsg((rule_t*) pData, (msg_t*) pParam);
+	dbgprintf("Processing next rule\n");
+	iRet = rule.ProcessBatch((rule_t*) pData, (batch_t*) pParam);
+dbgprintf("ruleset: get iRet %d from rule.ProcessMsg()\n", iRet);
+	return iRet;
 }
 
 
-/* Process (consume) a received message. Calls the actions configured.
+
+/* This function is similar to processBatch(), but works on a batch that
+ * contains rules from multiple rulesets. In this case, we can not push
+ * the whole batch through the ruleset. Instead, we examine it and
+ * partition it into sub-rulesets which we then push through the system.
+ * Note that when we evaluate which message must be processed, we do NOT need
+ * to look at bFilterOK, because this value is only set in a later processing
+ * stage. Doing so caused a bug during development ;)
+ * rgerhards, 2010-06-15
+ */
+static inline rsRetVal
+processBatchMultiRuleset(batch_t *pBatch)
+{
+	ruleset_t *currRuleset;
+	batch_t snglRuleBatch;
+	int i;
+	int iStart;	/* start index of partial batch */
+	int iNew;	/* index for new (temporary) batch */
+	int bHaveUnprocessed;	/* do we (still) have unprocessed entries? (loop term predicate) */
+	DEFiRet;
+
+	do {
+		bHaveUnprocessed = 0;
+		/* search for first unprocessed element */
+		for(iStart = 0 ; iStart < pBatch->nElem && pBatch->pElem[iStart].state == BATCH_STATE_DISC ; ++iStart)
+			/* just search, no action */;
+		if(iStart == pBatch->nElem)
+			break; /* everything processed */
+
+		/* prepare temporary batch */
+		CHKiRet(batchInit(&snglRuleBatch, pBatch->nElem));
+		snglRuleBatch.pbShutdownImmediate = pBatch->pbShutdownImmediate;
+		currRuleset = batchElemGetRuleset(pBatch, iStart);
+		iNew = 0;
+		for(i = iStart ; i < pBatch->nElem ; ++i) {
+			if(batchElemGetRuleset(pBatch, i) == currRuleset) {
+				/* for performance reasons, we copy only those members that we actually need */
+				snglRuleBatch.pElem[iNew].pUsrp = pBatch->pElem[i].pUsrp;
+				snglRuleBatch.pElem[iNew].state = pBatch->pElem[i].state;
+				++iNew;
+				/* We indicate the element also as done, so it will not be processed again */
+				pBatch->pElem[i].state = BATCH_STATE_DISC;
+			} else {
+				bHaveUnprocessed = 1;
+			}
+		}
+		snglRuleBatch.nElem = iNew; /* was left just right by the for loop */
+		batchSetSingleRuleset(&snglRuleBatch, 1);
+		/* process temp batch */
+		processBatch(&snglRuleBatch);
+		batchFree(&snglRuleBatch);
+	} while(bHaveUnprocessed == 1);
+
+finalize_it:
+	RETiRet;
+}
+
+/* Process (consume) a batch of messages. Calls the actions configured.
+ * If the whole batch uses a singel ruleset, we can process the batch as 
+ * a whole. Otherwise, we need to process it slower, on a message-by-message
+ * basis (what can be optimized to a per-ruleset basis)
  * rgerhards, 2005-10-13
  */
 static rsRetVal
-processMsg(msg_t *pMsg)
+processBatch(batch_t *pBatch)
 {
 	ruleset_t *pThis;
 	DEFiRet;
-	assert(pMsg != NULL);
+	assert(pBatch != NULL);
 
-	pThis = (pMsg->pRuleset == NULL) ? pDfltRuleset : pMsg->pRuleset;
-	ISOBJ_TYPE_assert(pThis, ruleset);
-
-	CHKiRet(llExecFunc(&pThis->llRules, processMsgDoRules, pMsg));
+	DBGPRINTF("processBatch: batch of %d elements must be processed\n", pBatch->nElem);
+	if(pBatch->bSingleRuleset) {
+		pThis = batchGetRuleset(pBatch);
+		if(pThis == NULL)
+			pThis = pDfltRuleset;
+		ISOBJ_TYPE_assert(pThis, ruleset);
+		CHKiRet(llExecFunc(&pThis->llRules, processBatchDoRules, pBatch));
+	} else {
+		CHKiRet(processBatchMultiRuleset(pBatch));
+	}
 
 finalize_it:
-	if(iRet == RS_RET_DISCARDMSG)
-		iRet = RS_RET_OK;
-
+	DBGPRINTF("ruleset.ProcessMsg() returns %d\n", iRet);
 	RETiRet;
 }
+
+
+/* return the ruleset-assigned parser list. NULL means use the default
+ * parser list.
+ * rgerhards, 2009-11-04
+ */
+static parserList_t*
+GetParserList(msg_t *pMsg)
+{
+	return (pMsg->pRuleset == NULL) ? pDfltRuleset->pParserLst : pMsg->pRuleset->pParserLst;
+}
+
 
 /* Add a new rule to the end of the current rule set. We do a number
  * of checks and ignore the rule if it does not pass them.
@@ -214,10 +300,23 @@ GetCurrent(void)
 }
 
 
+/* get main queue associated with ruleset. If no ruleset-specifc main queue
+ * is set, the primary main message queue is returned.
+ * We use a non-standard calling interface, as nothing can go wrong and it
+ * is really much more natural to return the pointer directly.
+ */
+static qqueue_t*
+GetRulesetQueue(ruleset_t *pThis)
+{
+	ISOBJ_TYPE_assert(pThis, ruleset);
+	return (pThis->pQueue == NULL) ? pMsgQueue : pThis->pQueue;
+}
+
+
 /* Find the ruleset with the given name and return a pointer to its object.
  */
-static rsRetVal
-GetRuleset(ruleset_t **ppRuleset, uchar *pszName)
+rsRetVal
+rulesetGetRuleset(ruleset_t **ppRuleset, uchar *pszName)
 {
 	DEFiRet;
 	assert(ppRuleset != NULL);
@@ -239,7 +338,7 @@ SetDefaultRuleset(uchar *pszName)
 	DEFiRet;
 	assert(pszName != NULL);
 
-	CHKiRet(GetRuleset(&pRuleset, pszName));
+	CHKiRet(rulesetGetRuleset(&pRuleset, pszName));
 	pDfltRuleset = pRuleset;
 	dbgprintf("default rule set changed to %p: '%s'\n", pRuleset, pszName);
 
@@ -257,7 +356,7 @@ SetCurrRuleset(uchar *pszName)
 	DEFiRet;
 	assert(pszName != NULL);
 
-	CHKiRet(GetRuleset(&pRuleset, pszName));
+	CHKiRet(rulesetGetRuleset(&pRuleset, pszName));
 	pCurrRuleset = pRuleset;
 	dbgprintf("current rule set changed to %p: '%s'\n", pRuleset, pszName);
 
@@ -319,6 +418,12 @@ finalize_it:
 BEGINobjDestruct(ruleset) /* be sure to specify the object type also in END and CODESTART macros! */
 CODESTARTobjDestruct(ruleset)
 	dbgprintf("destructing ruleset %p, name %p\n", pThis, pThis->pszName);
+	if(pThis->pQueue != NULL) {
+		qqueueDestruct(&pThis->pQueue);
+	}
+	if(pThis->pParserLst != NULL) {
+		parser.DestructParserList(&pThis->pParserLst);
+	}
 	llDestroy(&pThis->llRules);
 	free(pThis->pszName);
 ENDobjDestruct(ruleset)
@@ -385,6 +490,81 @@ debugPrintAll(void)
 }
 
 
+/* Create a ruleset-specific "main" queue for this ruleset. If one is already
+ * defined, an error message is emitted but nothing else is done.
+ * Note: we use the main message queue parameters for queue creation and access
+ * syslogd.c directly to obtain these. This is far from being perfect, but
+ * considered acceptable for the time being.
+ * rgerhards, 2009-10-27
+ */
+static rsRetVal
+rulesetCreateQueue(void __attribute__((unused)) *pVal, int *pNewVal)
+{
+	DEFiRet;
+
+	if(pCurrRuleset == NULL) {
+		errmsg.LogError(0, RS_RET_NO_CURR_RULESET, "error: currently no specific ruleset specified, thus a "
+				"queue can not be added to it");
+		ABORT_FINALIZE(RS_RET_NO_CURR_RULESET);
+	}
+
+	if(pCurrRuleset->pQueue != NULL) {
+		errmsg.LogError(0, RS_RET_RULES_QUEUE_EXISTS, "error: ruleset already has a main queue, can not "
+				"add another one");
+		ABORT_FINALIZE(RS_RET_RULES_QUEUE_EXISTS);
+	}
+
+	if(pNewVal == 0)
+		FINALIZE; /* if it is turned off, we do not need to change anything ;) */
+
+	dbgprintf("adding a ruleset-specific \"main\" queue");
+	CHKiRet(createMainQueue(&pCurrRuleset->pQueue, UCHAR_CONSTANT("ruleset")));
+
+finalize_it:
+	RETiRet;
+}
+
+
+/* Add a ruleset specific parser to the ruleset. Note that adding the first
+ * parser automatically disables the default parsers. If they are needed as well,
+ * the must be added via explicit config directives.
+ * Note: this is the only spot in the code that requires the parser object. In order
+ * to solve some class init bootstrap sequence problems, we get the object handle here
+ * instead of during module initialization. Note that objUse() is capable of being 
+ * called multiple times.
+ * rgerhards, 2009-11-04
+ */
+static rsRetVal
+rulesetAddParser(void __attribute__((unused)) *pVal, uchar *pName)
+{
+	parser_t *pParser;
+	DEFiRet;
+
+	assert(pCurrRuleset != NULL); 
+
+	CHKiRet(objUse(parser, CORE_COMPONENT));
+	iRet = parser.FindParser(&pParser, pName);
+	if(iRet == RS_RET_PARSER_NOT_FOUND) {
+		errmsg.LogError(0, RS_RET_PARSER_NOT_FOUND, "error: parser '%s' unknown at this time "
+			  	"(maybe defined too late in rsyslog.conf?)", pName);
+		ABORT_FINALIZE(RS_RET_NO_CURR_RULESET);
+	} else if(iRet != RS_RET_OK) {
+		errmsg.LogError(0, iRet, "error trying to find parser '%s'\n", pName);
+		FINALIZE;
+	}
+
+	CHKiRet(parser.AddParserToList(&pCurrRuleset->pParserLst, pParser));
+
+	dbgprintf("added parser '%s' to ruleset '%s'\n", pName, pCurrRuleset->pszName);
+RUNLOG_VAR("%p", pCurrRuleset->pParserLst);
+
+finalize_it:
+	d_free(pName); /* no longer needed */
+
+	RETiRet;
+}
+
+
 /* queryInterface function
  * rgerhards, 2008-02-21
  */
@@ -407,13 +587,15 @@ CODESTARTobjQueryInterface(ruleset)
 	pIf->IterateAllActions = iterateAllActions;
 	pIf->DestructAllActions = destructAllActions;
 	pIf->AddRule = addRule;
-	pIf->ProcessMsg = processMsg;
+	pIf->ProcessBatch = processBatch;
 	pIf->SetName = setName;
 	pIf->DebugPrintAll = debugPrintAll;
 	pIf->GetCurrent = GetCurrent;
-	pIf->GetRuleset = GetRuleset;
+	pIf->GetRuleset = rulesetGetRuleset;
 	pIf->SetDefaultRuleset = SetDefaultRuleset;
 	pIf->SetCurrRuleset = SetCurrRuleset;
+	pIf->GetRulesetQueue = GetRulesetQueue;
+	pIf->GetParserList = GetParserList;
 finalize_it:
 ENDobjQueryInterface(ruleset)
 
@@ -425,6 +607,7 @@ BEGINObjClassExit(ruleset, OBJ_IS_CORE_MODULE) /* class, version */
 	llDestroy(&llRulesets);
 	objRelease(errmsg, CORE_COMPONENT);
 	objRelease(rule, CORE_COMPONENT);
+	objRelease(parser, CORE_COMPONENT);
 ENDObjClassExit(ruleset)
 
 
@@ -443,6 +626,10 @@ BEGINObjClassInit(ruleset, 1, OBJ_IS_CORE_MODULE) /* class, version */
 
 	/* prepare global data */
 	CHKiRet(llInit(&llRulesets, rulesetDestructForLinkedList, keyDestruct, strcasecmp));
+
+	/* config file handlers */
+	CHKiRet(regCfSysLineHdlr((uchar *)"rulesetparser", 0, eCmdHdlrGetWord, rulesetAddParser, NULL, NULL));
+	CHKiRet(regCfSysLineHdlr((uchar *)"rulesetcreatemainqueue", 0, eCmdHdlrBinary, rulesetCreateQueue, NULL, NULL));
 ENDObjClassInit(ruleset)
 
 /* vi:set ai:

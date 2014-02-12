@@ -10,7 +10,7 @@
  * of the "old" message code without any modifications. However, it
  * helps to have things at the right place one we go to the meat of it.
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -64,6 +64,7 @@
 #include "errmsg.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -101,8 +102,8 @@ typedef struct _instanceData {
 /* config data */
 static uchar *pszTplName = NULL; /* name of the default template to use */
 static uchar *pszStrmDrvr = NULL; /* name of the stream driver to use */
-static short iStrmDrvrMode = 0; /* mode for stream driver, driver-dependent (0 mostly means plain tcp) */
-static short bResendLastOnRecon = 0; /* should the last message be re-sent on a successful reconnect? */
+static int iStrmDrvrMode = 0; /* mode for stream driver, driver-dependent (0 mostly means plain tcp) */
+static int bResendLastOnRecon = 0; /* should the last message be re-sent on a successful reconnect? */
 static uchar *pszStrmDrvrAuthMode = NULL; /* authentication mode to use */
 static int iUDPRebindInterval = 0;	/* support for automatic re-binding (load balancers!). 0 - no rebind */
 static int iTCPRebindInterval = 0;	/* support for automatic re-binding (load balancers!). 0 - no rebind */
@@ -436,13 +437,13 @@ CODESTARTdoAction
 	 * hard-coded but this may be changed to a config parameter.
 	 * rgerhards, 2006-11-30
 	 */
-	if(pData->compressionLevel && (l > MIN_SIZE_FOR_COMPRESS)) {
+	if(pData->compressionLevel && (l > CONF_MIN_SIZE_FOR_COMPRESS)) {
 		Bytef *out;
 		uLongf destLen = iMaxLine + iMaxLine/100 +12; /* recommended value from zlib doc */
 		uLong srcLen = l;
 		int ret;
 		/* TODO: optimize malloc sequence? -- rgerhards, 2008-09-02 */
-		CHKmalloc(out = (Bytef*) malloc(destLen));
+		CHKmalloc(out = (Bytef*) MALLOC(destLen));
 		out[0] = 'z';
 		out[1] = '\0';
 		ret = compress2((Bytef*) out+1, &destLen, (Bytef*) psz,
@@ -515,7 +516,6 @@ finalize_it:
 BEGINparseSelectorAct
 	uchar *q;
 	int i;
-	int bErr;
 	rsRetVal localRet;
         struct addrinfo;
 	TCPFRAMINGMODE tcp_framing = TCP_FRAMING_OCTET_STUFFING;
@@ -626,7 +626,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 		tmp = ++p;
 		for(i=0 ; *p && isdigit((int) *p) ; ++p, ++i)
 			/* SKIP AND COUNT */;
-		pData->port = malloc(i + 1);
+		pData->port = MALLOC(i + 1);
 		if(pData->port == NULL) {
 			errmsg.LogError(0, NO_ERRCODE, "Could not get memory to store syslog forwarding port, "
 				 "using default port, results may not be what you intend\n");
@@ -638,7 +638,6 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	}
 	
 	/* now skip to template */
-	bErr = 0;
 	while(*p && *p != ';'  && *p != '#' && !isspace((int) *p))
 		++p; /*JUST SKIP*/
 

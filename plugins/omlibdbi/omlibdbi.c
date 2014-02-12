@@ -10,24 +10,23 @@
  *
  * File begun on 2008-02-14 by RGerhards (extracted from syslogd.c)
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -43,6 +42,7 @@
 #include "dirty.h"
 #include "syslogd-types.h"
 #include "cfsysline.h"
+#include "conf.h"
 #include "srUtils.h"
 #include "template.h"
 #include "module-template.h"
@@ -50,6 +50,7 @@
 #include "errmsg.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -107,6 +108,11 @@ static void closeConn(instanceData *pData)
 BEGINfreeInstance
 CODESTARTfreeInstance
 	closeConn(pData);
+	free(pData->drvrName);
+	free(pData->host);
+	free(pData->usrName);
+	free(pData->pwd);
+	free(pData->dbName);
 ENDfreeInstance
 
 
@@ -170,7 +176,8 @@ static rsRetVal initConn(instanceData *pData, int bSilent)
 			errmsg.LogError(0, RS_RET_SUSPENDED, "libdbi error: libdbi or libdbi drivers not present on this system - suspending.");
 			ABORT_FINALIZE(RS_RET_SUSPENDED);
 		} else if(iDrvrsLoaded < 0) {
-			errmsg.LogError(0, RS_RET_SUSPENDED, "libdbi error: libdbi could not be initialized - suspending.");
+			errmsg.LogError(0, RS_RET_SUSPENDED, "libdbi error: libdbi could not be "
+				"initialized (do you have any dbi drivers installed?) - suspending.");
 			ABORT_FINALIZE(RS_RET_SUSPENDED);
 		}
 		bDbiInitialized = 1; /* we are done for the rest of our existence... */
@@ -287,7 +294,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	if(dbName  != NULL)
 		if((pData->dbName   = (uchar*) strdup((char*)dbName))   == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 	if(pwd     != NULL)
-		if((pData->pwd      = (uchar*) strdup((char*)""))       == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+		if((pData->pwd      = (uchar*) strdup((char*)pwd))       == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 
 	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, OMSR_RQD_TPL_OPT_SQL, (uchar*) " StdDBFmt"));
 
@@ -366,6 +373,7 @@ CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbipassword", 0, eCmdHdlrGetWord, NULL, &pwd, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbidbname", 0, eCmdHdlrGetWord, NULL, &dbName, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
+	DBGPRINTF("omlibdbi compiled with version %s loaded, libdbi version %s\n", VERSION, dbi_version());
 ENDmodInit
 
 /* vim:set ai:

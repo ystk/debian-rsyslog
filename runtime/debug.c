@@ -13,25 +13,23 @@
  *
  * For details, visit doc/debug.html
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h" /* autotools! */
 #include <stdio.h>
@@ -46,6 +44,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#if _POSIX_TIMERS <= 0
+#include <sys/time.h>
+#endif
 
 #include "rsyslog.h"
 #include "debug.h"
@@ -433,14 +434,13 @@ dbgMutLog_t *dbgMutLogFindHolder(pthread_mutex_t *pmut)
 static inline void dbgMutexPreLockLog(pthread_mutex_t *pmut, dbgFuncDB_t *pFuncDB, int ln)
 {
 	dbgMutLog_t *pHolder;
-	dbgMutLog_t *pLog;
 	char pszBuf[128];
 	char pszHolderThrdName[64];
 	char *pszHolder;
 
 	pthread_mutex_lock(&mutMutLog);
 	pHolder = dbgMutLogFindHolder(pmut);
-	pLog = dbgMutLogAddEntry(pmut, MUTOP_LOCKWAIT, pFuncDB, ln);
+	dbgMutLogAddEntry(pmut, MUTOP_LOCKWAIT, pFuncDB, ln);
 
 	if(pHolder == NULL)
 		pszHolder = "[NONE]";
@@ -469,7 +469,7 @@ static inline void dbgMutexLockLog(pthread_mutex_t *pmut, dbgFuncDB_t *pFuncDB, 
 	dbgMutLogDelEntry(pLog);
 
 	/* add "lock" entry */
-	pLog = dbgMutLogAddEntry(pmut, MUTOP_LOCK, pFuncDB, lockLn);
+	dbgMutLogAddEntry(pmut, MUTOP_LOCK, pFuncDB, lockLn);
 	dbgFuncDBAddMutexLock(pFuncDB, pmut, lockLn);
 	pthread_mutex_unlock(&mutMutLog);
 	if(bPrintMutexAction)
@@ -481,14 +481,13 @@ static inline void dbgMutexLockLog(pthread_mutex_t *pmut, dbgFuncDB_t *pFuncDB, 
 static inline void dbgMutexPreTryLockLog(pthread_mutex_t *pmut, dbgFuncDB_t *pFuncDB, int ln)
 {
    dbgMutLog_t *pHolder;
-   dbgMutLog_t *pLog;
    char pszBuf[128];
    char pszHolderThrdName[64];
    char *pszHolder;
 
    pthread_mutex_lock(&mutMutLog);
    pHolder = dbgMutLogFindHolder(pmut);
-   pLog = dbgMutLogAddEntry(pmut, MUTOP_TRYLOCK, pFuncDB, ln);
+   dbgMutLogAddEntry(pmut, MUTOP_TRYLOCK, pFuncDB, ln);
 
    if(pHolder == NULL)
       pszHolder = "[NONE]";
@@ -517,7 +516,7 @@ static inline void dbgMutexTryLockLog(pthread_mutex_t *pmut, dbgFuncDB_t *pFuncD
    dbgMutLogDelEntry(pLog);
 
    /* add "lock" entry */
-   pLog = dbgMutLogAddEntry(pmut, MUTOP_LOCK, pFuncDB, lockLn);
+   dbgMutLogAddEntry(pmut, MUTOP_LOCK, pFuncDB, lockLn);
    dbgFuncDBAddMutexLock(pFuncDB, pmut, lockLn);
    pthread_mutex_unlock(&mutMutLog);
    if(bPrintMutexAction)
@@ -831,13 +830,12 @@ sigsegvHdlr(int signum)
 	abort();
 }
 
-#if 1
-#pragma GCC diagnostic ignored "-Wempty-body"
-/* write the debug message. This is a helper to dbgprintf and dbgoprint which
- * contains common code. added 2008-09-26 rgerhards
+/* actually write the debug message. This is a separate fuction because the cleanup_push/_pop
+ * interface otherwise is unsafe to use (generates compiler warnings at least).
+ * 2009-05-20 rgerhards
  */
-static void
-dbgprint(obj_t *pObj, char *pszMsg, size_t lenMsg)
+static inline void
+do_dbgprint(uchar *pszObjName, char *pszMsg, size_t lenMsg)
 {
 	static pthread_t ptLastThrdID = 0;
 	static int bWasNL = 0;
@@ -845,20 +843,9 @@ dbgprint(obj_t *pObj, char *pszMsg, size_t lenMsg)
 	char pszWriteBuf[32*1024];
 	size_t lenWriteBuf;
 	struct timespec t;
-	uchar *pszObjName = NULL;
-
-	/* we must get the object name before we lock the mutex, because the object
-	 * potentially calls back into us. If we locked the mutex, we would deadlock
-	 * ourselfs. On the other hand, the GetName call needs not to be protected, as
-	 * this thread has a valid reference. If such an object is deleted by another
-	 * thread, we are in much more trouble than just for dbgprint(). -- rgerhards, 2008-09-26
-	 */
-	if(pObj != NULL) {
-		pszObjName = obj.GetName(pObj);
-	}
-
-	pthread_mutex_lock(&mutdbgprint);
-	pthread_cleanup_push(dbgMutexCancelCleanupHdlr, &mutdbgprint);
+#	if  _POSIX_TIMERS <= 0
+	struct timeval tv;
+#	endif
 
 	/* The bWasNL handler does not really work. It works if no thread
 	 * switching occurs during non-NL messages. Else, things are messed
@@ -884,7 +871,14 @@ dbgprint(obj_t *pObj, char *pszMsg, size_t lenMsg)
 
 	if(bWasNL) {
 		if(bPrintTime) {
+#			if _POSIX_TIMERS > 0
+			/* this is the "regular" code */
 			clock_gettime(CLOCK_REALTIME, &t);
+#			else
+			gettimeofday(&tv, NULL);
+			t.tv_sec = tv.tv_sec;
+			t.tv_nsec = tv.tv_usec * 1000;
+#			endif
 			lenWriteBuf = snprintf(pszWriteBuf, sizeof(pszWriteBuf),
 				 	"%4.4ld.%9.9ld:", (long) (t.tv_sec % 10000), t.tv_nsec);
 			if(stddbg != -1) write(stddbg, pszWriteBuf, lenWriteBuf);
@@ -906,11 +900,35 @@ dbgprint(obj_t *pObj, char *pszMsg, size_t lenMsg)
 	if(altdbg != -1) write(altdbg, pszMsg, lenMsg);
 
 	bWasNL = (pszMsg[lenMsg - 1] == '\n') ? 1 : 0;
+}
+
+#pragma GCC diagnostic ignored "-Wempty-body"
+/* write the debug message. This is a helper to dbgprintf and dbgoprint which
+ * contains common code. added 2008-09-26 rgerhards
+ */
+static void
+dbgprint(obj_t *pObj, char *pszMsg, size_t lenMsg)
+{
+	uchar *pszObjName = NULL;
+
+	/* we must get the object name before we lock the mutex, because the object
+	 * potentially calls back into us. If we locked the mutex, we would deadlock
+	 * ourselfs. On the other hand, the GetName call needs not to be protected, as
+	 * this thread has a valid reference. If such an object is deleted by another
+	 * thread, we are in much more trouble than just for dbgprint(). -- rgerhards, 2008-09-26
+	 */
+	if(pObj != NULL) {
+		pszObjName = obj.GetName(pObj);
+	}
+
+	pthread_mutex_lock(&mutdbgprint);
+	pthread_cleanup_push(dbgMutexCancelCleanupHdlr, &mutdbgprint);
+
+	do_dbgprint(pszObjName, pszMsg, lenMsg);
 
 	pthread_cleanup_pop(1);
 }
 #pragma GCC diagnostic warning "-Wempty-body"
-#endif
 
 /* print some debug output when an object is given
  * This is mostly a copy of dbgprintf, but I do not know how to combine it
@@ -941,6 +959,15 @@ dbgoprint(obj_t *pObj, char *fmt, ...)
 	va_start(ap, fmt);
 	lenWriteBuf = vsnprintf(pszWriteBuf, sizeof(pszWriteBuf), fmt, ap);
 	va_end(ap);
+	if(lenWriteBuf >= sizeof(pszWriteBuf)) {
+		/* prevent buffer overrruns and garbagge display */
+		pszWriteBuf[sizeof(pszWriteBuf) - 5] = '.';
+		pszWriteBuf[sizeof(pszWriteBuf) - 4] = '.';
+		pszWriteBuf[sizeof(pszWriteBuf) - 3] = '.';
+		pszWriteBuf[sizeof(pszWriteBuf) - 2] = '\n';
+		pszWriteBuf[sizeof(pszWriteBuf) - 1] = '\0';
+		lenWriteBuf = sizeof(pszWriteBuf);
+	}
 	dbgprint(pObj, pszWriteBuf, lenWriteBuf);
 }
 
@@ -952,7 +979,7 @@ void
 dbgprintf(char *fmt, ...)
 {
 	va_list ap;
-	char pszWriteBuf[20480];
+	char pszWriteBuf[32*1024];
 	size_t lenWriteBuf;
 
 	if(!(Debug && debugging_on))
@@ -1060,9 +1087,11 @@ int dbgEntrFunc(dbgFuncDB_t **ppFuncDB, const char *file, const char *func, int 
 	}
 
 	/* when we reach this point, we have a fully-initialized FuncDB! */
-	ATOMIC_INC(pFuncDB->nTimesCalled);
+	PREFER_ATOMIC_INC(pFuncDB->nTimesCalled);
 	if(bLogFuncFlow && dbgPrintNameIsInList((const uchar*)pFuncDB->file, printNameFileRoot))
-		dbgprintf("%s:%d: %s: enter\n", pFuncDB->file, pFuncDB->line, pFuncDB->func);
+		if(strcmp(pFuncDB->file, "stringbuf.c")) {	/* TODO: make configurable */
+			dbgprintf("%s:%d: %s: enter\n", pFuncDB->file, pFuncDB->line, pFuncDB->func);
+		}
 	if(pThrd->stackPtr >= (int) (sizeof(pThrd->callStack) / sizeof(dbgFuncDB_t*))) {
 		dbgprintf("%s:%d: %s: debug module: call stack for this thread full, suspending call tracking\n",
 			  pFuncDB->file, pFuncDB->line, pFuncDB->func);
@@ -1092,10 +1121,12 @@ void dbgExitFunc(dbgFuncDB_t *pFuncDB, int iStackPtrRestore, int iRet)
 
 	dbgFuncDBPrintActiveMutexes(pFuncDB, "WARNING: mutex still owned by us as we exit function, mutex: ", pthread_self());
 	if(bLogFuncFlow && dbgPrintNameIsInList((const uchar*)pFuncDB->file, printNameFileRoot)) {
-		if(iRet == RS_RET_NO_IRET)
-			dbgprintf("%s:%d: %s: exit: (no iRet)\n", pFuncDB->file, pFuncDB->line, pFuncDB->func);
-		else 
-			dbgprintf("%s:%d: %s: exit: %d\n", pFuncDB->file, pFuncDB->line, pFuncDB->func, iRet);
+		if(strcmp(pFuncDB->file, "stringbuf.c")) {	/* TODO: make configurable */
+			if(iRet == RS_RET_NO_IRET)
+				dbgprintf("%s:%d: %s: exit: (no iRet)\n", pFuncDB->file, pFuncDB->line, pFuncDB->func);
+			else 
+				dbgprintf("%s:%d: %s: exit: %d\n", pFuncDB->file, pFuncDB->line, pFuncDB->func, iRet);
+		}
 	}
 	pThrd->stackPtr = iStackPtrRestore;
 	if(pThrd->stackPtr < 0) {
@@ -1241,6 +1272,20 @@ dbgPrintNameIsInList(const uchar *pName, dbgPrintName_t *pRoot)
 }
 
 
+/* this is a special version of malloc that fills the alloced memory with
+ * HIGHVALUE, as this helps to identify bugs. -- rgerhards, 2009-10-22
+ */
+void *
+dbgmalloc(size_t size)
+{
+	void *pRet;
+	pRet = malloc(size);
+	if(pRet != NULL)
+		memset(pRet, 0xff, size);
+	return pRet;
+}
+
+
 /* read in the runtime options
  * rgerhards, 2008-02-28
  */
@@ -1259,7 +1304,7 @@ dbgGetRuntimeOptions(void)
 		while(dbgGetRTOptNamVal(&pszOpts, &optname, &optval)) {
 			if(!strcasecmp((char*)optname, "help")) {
 				fprintf(stderr,
-					"rsyslogd runtime debug support - help requested, rsyslog terminates\n\n"
+					"rsyslogd " VERSION " runtime debug support - help requested, rsyslog terminates\n\n"
 					"environment variables:\n"
 					"addional logfile: export RSYSLOG_DEBUGFILE=\"/path/to/file\"\n"
 					"to set: export RSYSLOG_DEBUG=\"cmd cmd cmd\"\n\n"
@@ -1280,11 +1325,11 @@ dbgGetRuntimeOptions(void)
 				/* this is earlier in the process than the -d option, as such it
 				 * allows us to spit out debug messages from the very beginning.
 				 */
-				Debug = 1;
+				Debug = DEBUG_FULL;
 				debugging_on = 1;
 			} else if(!strcasecmp((char*)optname, "debugondemand")) {
 				/* Enables debugging, but turns off debug output */
-				Debug = 1;
+				Debug = DEBUG_ONDEMAND;
 				debugging_on = 1;
 				dbgprintf("Note: debug on demand turned on via configuraton file, "
 					  "use USR1 signal to activate.\n");
@@ -1307,7 +1352,7 @@ dbgGetRuntimeOptions(void)
 				bAbortTrace = 0;
 			} else if(!strcasecmp((char*)optname, "filetrace")) {
 				if(*optval == '\0') {
-					fprintf(stderr, "Error: logfile debug option requires filename, "
+					fprintf(stderr, "rsyslogd " VERSION " error: logfile debug option requires filename, "
 						"e.g. \"logfile=debug.c\"\n");
 					exit(1);
 				} else {
@@ -1315,7 +1360,7 @@ dbgGetRuntimeOptions(void)
 					dbgPrintNameAdd(optval, &printNameFileRoot);
 				}
 			} else {
-				fprintf(stderr, "Error: invalid debug option '%s', value '%s' - ignored\n",
+				fprintf(stderr, "rsyslogd " VERSION " error: invalid debug option '%s', value '%s' - ignored\n",
 					optval, optname);
 			}
 		}

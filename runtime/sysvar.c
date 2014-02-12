@@ -5,25 +5,23 @@
  *
  * Module begun 2008-02-25 by Rainer Gerhards
  *
- * Copyright (C) 2008 by Rainer Gerhards and Adiscon GmbH.
+ * Copyright (C) 2008-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "config.h"
@@ -41,6 +39,7 @@
 DEFobjStaticHelpers
 DEFobjCurrIf(var)
 DEFobjCurrIf(datetime)
+DEFobjCurrIf(glbl)
 
 
 /* Standard-Constructor
@@ -146,6 +145,8 @@ GetVar(cstr_t *pstrVarName, var_t **ppVar)
 		CHKiRet(getNOW(NOW_HOUR, &pstrProp));
 	} else if(!rsCStrSzStrCmp(pstrVarName, (uchar*)"minute", sizeof("minute") - 1)) {
 		CHKiRet(getNOW(NOW_MINUTE, &pstrProp));
+	} else if(!rsCStrSzStrCmp(pstrVarName, (uchar*)"myhostname", sizeof("myhostname") - 1)) {
+		CHKiRet(rsCStrConstructFromszStr(&pstrProp, glbl.GetLocalHostName()));
 	} else {
 		ABORT_FINALIZE(RS_RET_SYSVAR_NOT_FOUND);
 	}
@@ -191,6 +192,7 @@ BEGINObjClassInit(sysvar, 1, OBJ_IS_CORE_MODULE) /* class, version */
 	/* request objects we use */
 	CHKiRet(objUse(var, CORE_COMPONENT));
 	CHKiRet(objUse(datetime, CORE_COMPONENT));
+	CHKiRet(objUse(glbl, CORE_COMPONENT));
 
 	/* set our own handlers */
 	OBJSetMethodHandler(objMethod_CONSTRUCTION_FINALIZER, sysvarConstructFinalize);

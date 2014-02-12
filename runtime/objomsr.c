@@ -3,25 +3,23 @@
  *
  * File begun on 2007-07-27 by RGerhards
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 
@@ -67,31 +65,25 @@ rsRetVal OMSRconstruct(omodStringRequest_t **ppThis, int iNumEntries)
 
 	assert(ppThis != NULL);
 	assert(iNumEntries >= 0);
-	if((pThis = calloc(1, sizeof(omodStringRequest_t))) == NULL) {
-		iRet = RS_RET_OUT_OF_MEMORY;
-		goto abort_it;
-	}
+	CHKmalloc(pThis = calloc(1, sizeof(omodStringRequest_t)));
 
 	/* got the structure, so fill it */
 	pThis->iNumEntries = iNumEntries;
 	/* allocate string for template name array. The individual strings will be
 	 * allocated as the code progresses (we do not yet know the string sizes)
 	 */
-	if((pThis->ppTplName = calloc(iNumEntries, sizeof(uchar*))) == NULL) {
-		OMSRdestruct(pThis);
-		pThis = NULL;
-		iRet =  RS_RET_OUT_OF_MEMORY;
-		goto abort_it;
-	}
+	CHKmalloc(pThis->ppTplName = calloc(iNumEntries, sizeof(uchar*)));
+
 	/* allocate the template options array. */
-	if((pThis->piTplOpts = calloc(iNumEntries, sizeof(int))) == NULL) {
-		OMSRdestruct(pThis);
-		pThis = NULL;
-		iRet =  RS_RET_OUT_OF_MEMORY;
-		goto abort_it;
-	}
+	CHKmalloc(pThis->piTplOpts = calloc(iNumEntries, sizeof(int)));
 	
-abort_it:
+finalize_it:
+	if(iRet != RS_RET_OK) {
+		if(pThis != NULL) {
+			OMSRdestruct(pThis);
+			pThis = NULL;
+		}
+	}
 	*ppThis = pThis;
 	RETiRet;
 }
@@ -155,7 +147,7 @@ OMSRgetSupportedTplOpts(unsigned long *pOpts)
 {
 	DEFiRet;
 	assert(pOpts != NULL);
-	*pOpts = OMSR_RQD_TPL_OPT_SQL | OMSR_TPL_AS_ARRAY;
+	*pOpts = OMSR_RQD_TPL_OPT_SQL | OMSR_TPL_AS_ARRAY | OMSR_TPL_AS_MSG;
 	RETiRet;
 }
 

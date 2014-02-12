@@ -6,24 +6,22 @@
  *
  * File begun on 2007-07-20 by RGerhards (extracted from syslogd.c)
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
- *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -46,6 +44,7 @@
 #include "cfsysline.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -60,9 +59,13 @@ typedef struct _instanceData {
 	char	f_dbuid[_DB_MAXUNAMELEN+1];	/* DB user */
 	char	f_dbpwd[_DB_MAXPWDLEN+1];	/* DB user's password */
 	unsigned uLastMySQLErrno;	/* last errno returned by MySQL or 0 if all is well */
+	uchar * f_configfile; /* MySQL Client Configuration File */
+	uchar * f_configsection; /* MySQL Client Configuration Section */
 } instanceData;
 
 /* config variables */
+static uchar * pszMySQLConfigFile = NULL;	/* MySQL Client Configuration File */
+static uchar * pszMySQLConfigSection = NULL;	/* MySQL Client Configuration Section */ 
 static int iSrvPort = 0;	/* database server port */
 
 
@@ -87,9 +90,16 @@ static void closeMySQL(instanceData *pData)
 	ASSERT(pData != NULL);
 
 	if(pData->f_hmysql != NULL) {	/* just to be on the safe side... */
-		mysql_server_end();
 		mysql_close(pData->f_hmysql);	
 		pData->f_hmysql = NULL;
+	}
+	if(pData->f_configfile!=NULL){
+		free(pData->f_configfile);
+		pData->f_configfile=NULL;
+	}
+	if(pData->f_configsection!=NULL){
+		free(pData->f_configsection);
+		pData->f_configsection=NULL;
 	}
 }
 
@@ -152,6 +162,25 @@ static rsRetVal initMySQL(instanceData *pData, int bSilent)
 		errmsg.LogError(0, RS_RET_SUSPENDED, "can not initialize MySQL handle");
 		iRet = RS_RET_SUSPENDED;
 	} else { /* we could get the handle, now on with work... */
+		mysql_options(pData->f_hmysql,MYSQL_READ_DEFAULT_GROUP,((pData->f_configsection!=NULL)?(char*)pData->f_configsection:"client"));
+		if(pData->f_configfile!=NULL){
+			FILE * fp;
+			fp=fopen((char*)pData->f_configfile,"r");
+			int err=errno;
+			if(fp==NULL){
+				char msg[512];
+				snprintf(msg,sizeof(msg)/sizeof(char),"Could not open '%s' for reading",pData->f_configfile);
+				if(bSilent) {
+					char errStr[512];
+					rs_strerror_r(err, errStr, sizeof(errStr));
+					dbgprintf("mysql configuration error(%d): %s - %s\n",err,msg,errStr);
+				} else
+					errmsg.LogError(err,NO_ERRCODE,"mysql configuration error: %s\n",msg);
+			} else {
+				fclose(fp);
+				mysql_options(pData->f_hmysql,MYSQL_READ_DEFAULT_FILE,pData->f_configfile);
+			}
+		}
 		/* Connect to database */
 		if(mysql_real_connect(pData->f_hmysql, pData->f_dbsrv, pData->f_dbuid,
 				      pData->f_dbpwd, pData->f_dbname, pData->f_dbsrvPort, NULL, 0) == NULL) {
@@ -278,6 +307,8 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 		ABORT_FINALIZE(RS_RET_INVALID_PARAMS);
 	} else {
 		pData->f_dbsrvPort = (unsigned) iSrvPort;	/* set configured port */
+		pData->f_configfile = pszMySQLConfigFile;
+		pData->f_configsection = pszMySQLConfigSection;
 		pData->f_hmysql = NULL; /* initialize, but connect only on first message (important for queued mode!) */
 	}
 
@@ -287,6 +318,11 @@ ENDparseSelectorAct
 
 BEGINmodExit
 CODESTARTmodExit
+#	ifdef HAVE_MYSQL_LIBRARY_INIT
+	mysql_library_end();
+#	else
+	mysql_server_end();
+#	endif
 ENDmodExit
 
 
@@ -302,6 +338,10 @@ static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __a
 {
 	DEFiRet;
 	iSrvPort = 0; /* zero is the default port */
+	free(pszMySQLConfigFile);
+	pszMySQLConfigFile = NULL;
+	free(pszMySQLConfigSection);
+	pszMySQLConfigSection = NULL;
 	RETiRet;
 }
 
@@ -310,9 +350,25 @@ CODESTARTmodInit
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
+
+	/* we need to init the MySQL library. If that fails, we cannot run */
+	if(
+#	ifdef HAVE_MYSQL_LIBRARY_INIT
+	   mysql_library_init(0, NULL, NULL)
+#	else
+	   mysql_server_init(0, NULL, NULL)
+#	endif
+	                                   ) {
+		errmsg.LogError(0, NO_ERRCODE, "ommysql: mysql_server_init() failed, plugin "
+		                "can not run");
+		ABORT_FINALIZE(RS_RET_ERR);
+	}
+
 	/* register our config handlers */
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionommysqlserverport", 0, eCmdHdlrInt, NULL, &iSrvPort, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"ommysqlconfigfile",0,eCmdHdlrGetWord,NULL,&pszMySQLConfigFile,STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"ommysqlconfigsection",0,eCmdHdlrGetWord,NULL,&pszMySQLConfigSection,STD_LOADABLE_MODULE_ID));
 ENDmodInit
 
 /* vi:set ai:

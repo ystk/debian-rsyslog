@@ -7,18 +7,23 @@ pkglib_LTLIBRARIES =
 librsyslog_la_SOURCES = \
 	rsyslog.c \
 	rsyslog.h \
+	typedefs.h \
 	unicode-helper.h \
 	atomic.h \
+	batch.h \
 	syslogd-types.h \
 	module-template.h \
 	obj-types.h \
 	nsd.h \
 	glbl.h \
 	glbl.c \
+	unlimited_select.h \
 	conf.c \
 	conf.h \
 	parser.h \
 	parser.c \
+	strgen.h \
+	strgen.c \
 	msg.c \
 	msg.h \
 	linkedlist.c \
@@ -41,6 +46,8 @@ librsyslog_la_SOURCES = \
 	modules.h \
 	apc.c \
 	apc.h \
+	statsobj.c \
+	statsobj.h \
 	sync.c \
 	sync.h \
 	expr.c \
@@ -77,6 +84,8 @@ librsyslog_la_SOURCES = \
 	prop.h \
 	cfsysline.c \
 	cfsysline.h \
+	sd-daemon.c \
+	sd-daemon.h \
 	\
 	\
 	../action.h \
@@ -87,6 +96,12 @@ librsyslog_la_SOURCES = \
 	../parse.c \
 	../parse.h \
 	\
+	hashtable.c \
+	hashtable.h \
+	hashtable_itr.c \
+	hashtable_itr.h \
+	hashtable_private.h \
+	\
 	../outchannel.c \
 	../outchannel.h \
 	../template.c \
@@ -95,9 +110,9 @@ librsyslog_la_SOURCES = \
 # runtime or will no longer be needed. -- rgerhards, 2008-06-13
 
 if WITH_MODDIRS
-librsyslog_la_CPPFLAGS = -D_PATH_MODDIR=\"$(pkglibdir)/:$(moddirs)\" $(PTHREADS_CFLAGS)
+librsyslog_la_CPPFLAGS = -DSD_EXPORT_SYMBOLS -D_PATH_MODDIR=\"$(pkglibdir)/:$(moddirs)\" $(PTHREADS_CFLAGS)
 else
-librsyslog_la_CPPFLAGS = -D_PATH_MODDIR=\"$(pkglibdir)/\" -I$(top_srcdir) $(PTHREADS_CFLAGS)
+librsyslog_la_CPPFLAGS = -DSD_EXPORT_SYMBOLS -D_PATH_MODDIR=\"$(pkglibdir)/\" -I$(top_srcdir) $(PTHREADS_CFLAGS)
 endif
 #librsyslog_la_LDFLAGS = -module -avoid-version
 librsyslog_la_LIBADD =  $(DL_LIBS) $(RT_LIBS)
@@ -135,7 +150,10 @@ lmnet_la_LDFLAGS = -module -avoid-version
 lmnet_la_LIBADD =
 
 # network stream master class and stream factory
-lmnetstrms_la_SOURCES = netstrms.c netstrms.h netstrm.c netstrm.h nssel.c nssel.h
+lmnetstrms_la_SOURCES = netstrms.c netstrms.h \
+			netstrm.c netstrm.h \
+			nssel.c nssel.h \
+			nspoll.c nspoll.h
 lmnetstrms_la_CPPFLAGS = $(PTHREADS_CFLAGS) $(RSRT_CFLAGS)
 lmnetstrms_la_LDFLAGS = -module -avoid-version
 lmnetstrms_la_LIBADD =
@@ -151,7 +169,9 @@ lmstrmsrv_la_LIBADD =
 
 # plain tcp driver - main driver
 pkglib_LTLIBRARIES += lmnsd_ptcp.la
-lmnsd_ptcp_la_SOURCES = nsd_ptcp.c nsd_ptcp.h nsdsel_ptcp.c nsdsel_ptcp.h
+lmnsd_ptcp_la_SOURCES = nsd_ptcp.c nsd_ptcp.h \
+		  	nsdsel_ptcp.c nsdsel_ptcp.h \
+			nsdpoll_ptcp.c nsdpoll_ptcp.h
 lmnsd_ptcp_la_CPPFLAGS = $(PTHREADS_CFLAGS) $(RSRT_CFLAGS)
 lmnsd_ptcp_la_LDFLAGS = -module -avoid-version
 lmnsd_ptcp_la_LIBADD =
@@ -168,3 +188,6 @@ lmnsd_gtls_la_LDFLAGS = -module -avoid-version
 lmnsd_gtls_la_LIBADD = $(GNUTLS_LIBS)
 endif
 
+update-systemd:
+       curl http://cgit.freedesktop.org/systemd/plain/src/sd-daemon.c > sd-daemon.c
+       curl http://cgit.freedesktop.org/systemd/plain/src/sd-daemon.h > sd-daemon.h

@@ -39,15 +39,34 @@ lmgssutil_la_LDFLAGS = -module -avoid-version
 lmgssutil_la_LIBADD = $(GSS_LIBS)
 endif
 
+#
+# systemd support
+#
+if HAVE_SYSTEMD
+
+nodist_systemdsystemunit_DATA = \
+	rsyslog.service
+
+CLEANFILES = \
+	rsyslog.service
+
+%.service: %.service.in
+	$(AM_V_GEN)sed -e 's,@sbindir\@,$(sbindir),g' $< > $@
+
+endif
+
 EXTRA_DIST = \
 	freebsd/rsyslogd \
 	slackware/rc.rsyslogd \
 	contrib/README \
 	rsyslog.conf \
+	COPYING \
 	COPYING.LESSER \
+	COPYING.ASL20 \
 	contrib/gnutls/ca.pem \
 	contrib/gnutls/cert.pem \
-	contrib/gnutls/key.pem
+	contrib/gnutls/key.pem \
+	rsyslog.service.in
 
 SUBDIRS = doc runtime . plugins/immark plugins/imuxsock plugins/imtcp plugins/imudp plugins/omtesting
 
@@ -57,6 +76,14 @@ endif
 
 if ENABLE_IMKLOG
 SUBDIRS += plugins/imklog
+endif
+
+if ENABLE_IMPSTATS
+SUBDIRS += plugins/impstats
+endif
+
+if ENABLE_IMSOLARIS
+SUBDIRS += plugins/imsolaris
 endif
 
 if ENABLE_GSSAPI
@@ -87,6 +114,10 @@ if ENABLE_CUST1
 SUBDIRS += plugins/cust1
 endif
 
+if ENABLE_SMCUSTBINDCDR
+SUBDIRS += plugins/sm_cust_bindcdr
+endif
+
 if ENABLE_IMTEMPLATE
 SUBDIRS += plugins/imtemplate
 endif
@@ -95,12 +126,60 @@ if ENABLE_OMSTDOUT
 SUBDIRS += plugins/omstdout
 endif
 
+if ENABLE_PMCISCONAMES
+SUBDIRS += plugins/pmcisconames
+endif
+
+if ENABLE_PMAIXFORWARDEDFROM
+SUBDIRS += plugins/pmaixforwardedfrom
+endif
+
+if ENABLE_PMSNARE
+SUBDIRS += plugins/pmsnare
+endif
+
+if ENABLE_PMLASTMSG
+SUBDIRS += plugins/pmlastmsg
+endif
+
+if ENABLE_PMRFC3164SD
+SUBDIRS += plugins/pmrfc3164sd
+endif
+
+if ENABLE_OMRULESET
+SUBDIRS += plugins/omruleset
+endif
+
+if ENABLE_OMDBALERTING
+SUBDIRS += plugins/omdbalerting
+endif
+
+if ENABLE_OMUDPSPOOF
+SUBDIRS += plugins/omudpspoof
+endif
+
+if ENABLE_OMUXSOCK
+SUBDIRS += plugins/omuxsock
+endif
+
+if ENABLE_OMHDFS
+SUBDIRS += plugins/omhdfs
+endif
+
 if ENABLE_OMTEMPLATE
 SUBDIRS += plugins/omtemplate
 endif
 
+if ENABLE_MMSNMPTRAPD
+SUBDIRS += plugins/mmsnmptrapd
+endif
+
 if ENABLE_IMFILE
 SUBDIRS += plugins/imfile
+endif
+
+if ENABLE_IMPTCP
+SUBDIRS += plugins/imptcp
 endif
 
 if ENABLE_IMDIAG
@@ -123,6 +202,10 @@ if ENABLE_ORACLE
 SUBDIRS += plugins/omoracle
 endif
 
+if ENABLE_GUI
+SUBDIRS += java
+endif
+
 # tests are added as last element, because tests may need different
 # modules that need to be generated first
 SUBDIRS += tests
@@ -134,5 +217,34 @@ SUBDIRS += tests
 # temporarily be removed below. The intent behind forcing everthing to compile
 # in a make distcheck is so that we detect code that accidently was not updated
 # when some global update happened.
-DISTCHECK_CONFIGURE_FLAGS=--enable-gssapi_krb5 --enable-imfile --enable-snmp --enable-pgsql --enable-libdbi --enable-mysql --enable-omtemplate --enable-imtemplate --enable-relp --enable-rsyslogd --enable-mail --enable-klog  --enable-diagtools --enable-gnutls --enable-omstdout --enable-omprog --enable-imdiag --enable-shave --enable-extended-tests
+DISTCHECK_CONFIGURE_FLAGS=	--enable-gssapi_krb5 \
+				--enable-imfile \
+				--enable-snmp \
+				--enable-pgsql \
+				--enable-libdbi \
+				--enable-mysql \
+				--enable-relp \
+				--enable-rsyslogd \
+				--enable-mail \
+				--enable-klog \
+				--enable-diagtools \
+				--enable-gnutls \
+				--enable-omstdout \
+				--enable-pmlastmsg \
+				--enable-omruleset \
+				--enable-omprog \
+				--enable-imdiag \
+				--enable-imptcp \
+				--enable-omuxsock \
+				--enable-extended-tests \
+				--enable-impstats \
+				--enable-imptcp \
+				--enable-memcheck \
+				--enable-pmaixforwardedfrom \
+				--enable-pmcisconames \
+				--enable-pmsnare \
+				--enable-imtemplate \
+				--enable-omtemplate \
+				--enable-mmsnmptrapd \
+				--with-systemdsystemunitdir=$$dc_install_base/$(systemdsystemunitdir)
 ACLOCAL_AMFLAGS = -I m4

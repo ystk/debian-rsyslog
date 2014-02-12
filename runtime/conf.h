@@ -1,23 +1,22 @@
 /* Definitions for config file handling (not yet an object).
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef INCLUDED_CONF_H
 #define INCLUDED_CONF_H
@@ -37,20 +36,18 @@ BEGINinterface(conf) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*doIncludeLine)(uchar **pp, __attribute__((unused)) void* pVal);
 	rsRetVal (*cfline)(uchar *line, rule_t **pfCurr);
 	rsRetVal (*processConfFile)(uchar *pConfFile);
-	rsRetVal (*ReInitConf)(void);
 	rsRetVal (*GetNbrActActions)(int *);
 ENDinterface(conf)
-#define confCURR_IF_VERSION 2 /* increment whenever you change the interface structure! */
+#define confCURR_IF_VERSION 3 /* increment whenever you change the interface structure! */
+/* in Version 3, entry point "ReInitConf()" was removed, as we do not longer need
+ * to support restart-type HUP -- rgerhards, 2009-07-15
+ */
 
 
 /* prototypes */
 PROTOTYPEObj(conf);
 
 
-/* TODO: remove them below (means move the config init code) -- rgerhards, 2008-02-19 */
-extern EHostnameCmpMode eDfltHostnameCmpMode;
-extern cstr_t *pDfltHostnameCmp;
-extern cstr_t *pDfltProgNameCmp;
 /* TODO: the following 2 need to go in conf obj interface... */
 rsRetVal cflineParseTemplateName(uchar** pp, omodStringRequest_t *pOMSR, int iEntry, int iTplOpts, uchar *dfltTplName);
 rsRetVal cflineParseFileName(uchar* p, uchar *pFileName, omodStringRequest_t *pOMSR, int iEntry, int iTplOpts, uchar *pszTpl);

@@ -31,16 +31,24 @@ html_files = \
 	version_naming.html \
 	contributors.html \
 	dev_queue.html \
+	omstdout.html \
+	omudpspoof.html \
+	omruleset.html \
 	omsnmp.html \
 	ommysql.html \
 	omoracle.html \
 	omlibdbi.html \
 	imfile.html \
 	imtcp.html \
+	imptcp.html \
+	impstats.html \
 	imgssapi.html \
 	imrelp.html \
+	imsolaris.html \
 	imuxsock.html \
 	imklog.html \
+	pmlastmsg.html \
+	mmsnmptrapd.html \
 	queues.html \
 	src/queueWorkerLogic.dia \
 	queueWorkerLogic.jpg \
@@ -63,6 +71,7 @@ html_files = \
 	rsconf1_actionresumeinterval.html \
 	rsconf1_allowedsender.html \
 	rsconf1_controlcharacterescapeprefix.html \
+	rsconf1_escape8bitcharsonreceive.html \
 	rsconf1_debugprintcfsyslinehandlerlist.html \
 	rsconf1_debugprintmodulelist.html \
 	rsconf1_debugprinttemplatelist.html \
@@ -88,9 +97,12 @@ html_files = \
 	rsconf1_moddir.html \
 	rsconf1_repeatedmsgreduction.html \
 	rsconf1_resetconfigvariables.html \
+	rsconf1_rulesetcreatemainqueue.html \
 	rsconf1_umask.html \
+	rsconf1_rulesetparser.html \
 	v3compatibility.html \
 	v4compatibility.html \
+	v5compatibility.html \
 	im3195.html \
 	netstream.html \
 	ns_gtls.html \
@@ -99,6 +111,7 @@ html_files = \
 	gssapi.html \
 	licensing.html \
 	ommail.html \
+	omuxsock.html \
 	omrelp.html \
 	syslog_parsing.html \
 	troubleshoot.html \
@@ -117,6 +130,7 @@ html_files = \
 grfx_files = \
 	rsyslog_confgraph_complex.png\
 	rsyslog_confgraph_std.png \
+	module_workflow.png \
 	direct_queue0.png \
 	direct_queue1.png \
 	direct_queue2.png \
@@ -127,6 +141,8 @@ grfx_files = \
 	dataflow.png \
 	queue_analogy_tv.png \
 	gssapi.png \
+	rfc5424layers.png \
+	src/rfc5424layers.dia \
 	rsyslog-vers.png
 
 EXTRA_DIST = $(html_files) $(grfx_files)

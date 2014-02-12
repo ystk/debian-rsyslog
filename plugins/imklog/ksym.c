@@ -122,6 +122,7 @@
 #include "imklog.h"
 #include "ksyms.h"
 #include "module.h"
+#include "debug.h"
 
 
 int num_syms = 0;
@@ -523,7 +524,7 @@ static int AddSymbol(unsigned long address, char *symbol)
 		return(0);
 
 	/* Then the space for the symbol. */
-	sym_array[num_syms].name = (char *) malloc(strlen(symbol)*sizeof(char) + 1);
+	sym_array[num_syms].name = (char *) MALLOC(strlen(symbol)*sizeof(char) + 1);
 	if ( sym_array[num_syms].name == NULL )
 		return(0);
 	
@@ -650,8 +651,7 @@ static void FreeSymbols(void)
  **************************************************************************/
 extern char *ExpandKadds(char *line, char *el)
 {
-	auto char	dlm,
-			*kp,
+	auto char	*kp,
 			*sl = line,
 			*elp = el,
 			*symbol;
@@ -781,7 +781,6 @@ extern char *ExpandKadds(char *line, char *el)
 			strcpy(el, sl);
 			return(el);
 		}
-		dlm = *kp;
 		strncpy(num,sl+1,kp-sl-1);
 		num[kp-sl-1] = '\0';
 		value = strtoul(num, (char **) 0, 16);

@@ -80,6 +80,16 @@
 #include "prop.h"
 #include "rule.h"
 #include "ruleset.h"
+#include "parser.h"
+#include "strgen.h"
+#include "statsobj.h"
+#include "atomic.h"
+
+#ifdef HAVE_PTHREAD_SETSCHEDPARAM
+struct sched_param default_sched_param;
+pthread_attr_t default_thread_attr;
+int default_thr_sched_policy;
+#endif
 
 /* forward definitions */
 static rsRetVal dfltErrLogger(int, uchar *errMsg);
@@ -135,6 +145,18 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 
 	if(iRefCount == 0) {
 		/* init runtime only if not yet done */
+#ifdef HAVE_PTHREAD_SETSCHEDPARAM
+	    	CHKiRet(pthread_getschedparam(pthread_self(),
+			    		      &default_thr_sched_policy,
+					      &default_sched_param));
+		CHKiRet(pthread_attr_init(&default_thread_attr));
+		CHKiRet(pthread_attr_setschedpolicy(&default_thread_attr,
+			    			    default_thr_sched_policy));
+		CHKiRet(pthread_attr_setschedparam(&default_thread_attr,
+			    			   &default_sched_param));
+		CHKiRet(pthread_attr_setinheritsched(&default_thread_attr,
+			    			     PTHREAD_EXPLICIT_SCHED));
+#endif
 		if(ppErrObj != NULL) *ppErrObj = "obj";
 		CHKiRet(objClassInit(NULL)); /* *THIS* *MUST* always be the first class initilizer being called! */
 		CHKiRet(objGetObjInterface(pObjIF)); /* this provides the root pointer for all other queries */
@@ -147,12 +169,12 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 		 * class immediately after it is initialized. And, of course, we load those classes
 		 * first that we use ourselfs... -- rgerhards, 2008-03-07
 		 */
+		if(ppErrObj != NULL) *ppErrObj = "statsobj";
+		CHKiRet(statsobjClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "prop";
 		CHKiRet(propClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "glbl";
 		CHKiRet(glblClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "datetime";
-		CHKiRet(datetimeClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "msg";
 		CHKiRet(msgClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "ctok_token";
@@ -183,6 +205,10 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 		CHKiRet(qqueueClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "conf";
 		CHKiRet(confClassInit(NULL));
+		if(ppErrObj != NULL) *ppErrObj = "parser";
+		CHKiRet(parserClassInit(NULL));
+		if(ppErrObj != NULL) *ppErrObj = "strgen";
+		CHKiRet(strgenClassInit(NULL));
 
 		/* dummy "classes" */
 		if(ppErrObj != NULL) *ppErrObj = "str";
@@ -215,6 +241,7 @@ rsrtExit(void)
 		glblClassExit();
 		rulesetClassExit();
 		ruleClassExit();
+
 		objClassExit(); /* *THIS* *MUST/SHOULD?* always be the first class initilizer being called (except debug)! */
 	}
 

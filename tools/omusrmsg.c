@@ -5,13 +5,10 @@
  * NOTE: read comments in module-template.h to understand how this file
  *       works!
  *
- * File begun on 2007-07-20 by RGerhards (extracted from syslogd.c)
- * This file is under development and has not yet arrived at being fully
- * self-contained and a real object. So far, it is mostly an excerpt
- * of the "old" message code without any modifications. However, it
- * helps to have things at the right place one we go to the meat of it.
+ * File begun on 2007-07-20 by RGerhards (extracted from syslogd.c, which at the
+ * time of the fork from sysklogd was under BSD license)
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * rgerhards, 2008-07-04 (happy Independence Day!): rsyslog inherited the
  * wall functionality from sysklogd. Sysklogd was single-threaded and could
@@ -26,20 +23,19 @@
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -87,6 +83,7 @@
 
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -143,7 +140,7 @@ void setutent(void)
 {
 	assert(BSD_uf == NULL);
 	if ((BSD_uf = fopen(_PATH_UTMP, "r")) == NULL) {
-		errmsg.LogError(NO_ERRCODE, "%s", _PATH_UTMP);
+		errmsg.LogError(0, NO_ERRCODE, "%s", _PATH_UTMP);
 		return;
 	}
 }
@@ -249,7 +246,6 @@ static rsRetVal wallmsg(uchar* pMsg, instanceData *pData)
 				}
 			}
 			close(ttyf);
-			ttyf = -1;
 		}
 	}
 
@@ -279,7 +275,9 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	    *   [a-zA-Z0-9_.]
 	    * plus '*' for wall
 	    */
-	if(!*p || !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')
+	if(!strncmp((char*) p, ":omusrmsg:", sizeof(":omusrmsg:") - 1)) {
+		p += sizeof(":omusrmsg:") - 1; /* eat indicator sequence  (-1 because of '\0'!) */
+	} else if(!*p || !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z')
 	   || (*p >= '0' && *p <= '9') || *p == '_' || *p == '.' || *p == '*'))
 		ABORT_FINALIZE(RS_RET_CONFLINE_UNPROCESSED);
 

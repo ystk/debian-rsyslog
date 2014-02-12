@@ -1,26 +1,26 @@
 /* imtcp.c
  * This is the implementation of the TCP input module.
  *
- * File begun on 2007-12-21 by RGerhards (extracted from syslogd.c)
+ * File begun on 2007-12-21 by RGerhards (extracted from syslogd.c,
+ * which at the time of the rsyslog fork was BSD-licensed)
  *
- * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 /* This note shall explain the calling sequence while we do not have
@@ -65,6 +65,7 @@
 #include "net.h" /* for permittedPeers, may be removed when this is removed */
 
 MODULE_TYPE_INPUT
+MODULE_TYPE_NOKEEP
 
 /* static data */
 DEF_IMOD_STATIC_DATA
@@ -86,6 +87,7 @@ static int iTCPLstnMax = 20; /* max number of sessions */
 static int iStrmDrvrMode = 0; /* mode for stream driver, driver-dependent (0 mostly means plain tcp) */
 static int bEmitMsgOnClose = 0; /* emit an informational message on close by remote peer */
 static int iAddtlFrameDelim = TCPSRV_NO_ADDTL_DELIMITER; /* addtl frame delimiter, e.g. for netscreen, default none */
+static int bDisableLFDelim = 0; /* disbale standard LF delimiter */
 static uchar *pszStrmDrvrAuthMode = NULL; /* authentication mode to use */
 static uchar *pszInputName = NULL; /* value for inputname property, NULL is OK and handled by core engine */
 static ruleset_t *pBindRuleset = NULL; /* ruleset to bind listener to (use system default if unspecified) */
@@ -97,7 +99,7 @@ static int
 isPermittedHost(struct sockaddr *addr, char *fromHostFQDN, void __attribute__((unused)) *pUsrSrv,
 	        void __attribute__((unused)) *pUsrSess)
 {
-	return net.isAllowedSender(UCHAR_CONSTANT("TCP"), addr, fromHostFQDN);
+	return net.isAllowedSender2(UCHAR_CONSTANT("TCP"), addr, fromHostFQDN, 1);
 }
 
 
@@ -171,7 +173,7 @@ static rsRetVal setRuleset(void __attribute__((unused)) *pVal, uchar *pszName)
 
 	localRet = ruleset.GetRuleset(&pRuleset, pszName);
 	if(localRet == RS_RET_NOT_FOUND) {
-		errmsg.LogError(0, NO_ERRCODE, "error: ruleset '%s' not found - ignored", pszName);
+		errmsg.LogError(0, RS_RET_RULESET_NOT_FOUND, "error: ruleset '%s' not found - ignored", pszName);
 	}
 	CHKiRet(localRet);
 	pBindRuleset = pRuleset;
@@ -198,6 +200,7 @@ static rsRetVal addTCPListener(void __attribute__((unused)) *pVal, uchar *pNewVa
 		CHKiRet(tcpsrv.SetCBOnErrClose(pOurTcpsrv, onErrClose));
 		CHKiRet(tcpsrv.SetDrvrMode(pOurTcpsrv, iStrmDrvrMode));
 		CHKiRet(tcpsrv.SetAddtlFrameDelim(pOurTcpsrv, iAddtlFrameDelim));
+		CHKiRet(tcpsrv.SetbDisableLFDelim(pOurTcpsrv, bDisableLFDelim));
 		CHKiRet(tcpsrv.SetNotificationOnRemoteClose(pOurTcpsrv, bEmitMsgOnClose));
 		/* now set optional params, but only if they were actually configured */
 		if(pszStrmDrvrAuthMode != NULL) {
@@ -254,6 +257,13 @@ CODESTARTafterRun
 ENDafterRun
 
 
+BEGINisCompatibleWithFeature
+CODESTARTisCompatibleWithFeature
+	if(eFeat == sFEATURENonCancelInputTermination)
+		iRet = RS_RET_OK;
+ENDisCompatibleWithFeature
+
+
 BEGINmodExit
 CODESTARTmodExit
 	if(pOurTcpsrv != NULL)
@@ -281,6 +291,7 @@ resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unus
 	iStrmDrvrMode = 0;
 	bEmitMsgOnClose = 0;
 	iAddtlFrameDelim = TCPSRV_NO_ADDTL_DELIMITER;
+	bDisableLFDelim = 0;
 	free(pszInputName);
 	pszInputName = NULL;
 	free(pszStrmDrvrAuthMode);
@@ -293,6 +304,7 @@ resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unus
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_IMOD_QUERIES
+CODEqueryEtryPt_IsCompatibleWithFeature_IF_OMOD_QUERIES
 ENDqueryEtryPt
 
 
@@ -326,6 +338,8 @@ CODEmodInit_QueryRegCFSLineHdlr
 				   eCmdHdlrGetWord, setPermittedPeer, NULL, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr(UCHAR_CONSTANT("inputtcpserveraddtlframedelimiter"), 0, eCmdHdlrInt,
 				   NULL, &iAddtlFrameDelim, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr(UCHAR_CONSTANT("inputtcpserverdisablelfdelimiter"), 0, eCmdHdlrBinary,
+				   NULL, &bDisableLFDelim, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr(UCHAR_CONSTANT("inputtcpserverinputname"), 0,
 				   eCmdHdlrGetWord, NULL, &pszInputName, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr(UCHAR_CONSTANT("inputtcpserverbindruleset"), 0,

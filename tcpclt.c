@@ -3,24 +3,23 @@
  * This is the implementation of TCP-based syslog clients (the counterpart
  * of the tcpsrv class).
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -46,6 +45,7 @@
 #include "srUtils.h"
 
 MODULE_TYPE_LIB
+MODULE_TYPE_NOKEEP
 
 /* static data */
 DEFobjStaticHelpers
@@ -169,7 +169,7 @@ TCPSendBldFrame(tcpclt_t *pThis, char **pmsg, size_t *plen, int *pbMustBeFreed)
 			 * I have added this comment so that the logic is not accidently
 			 * changed again. rgerhards, 2005-10-25
 			 */
-			if((buf = malloc((len + 2) * sizeof(char))) == NULL) {
+			if((buf = MALLOC((len + 2) * sizeof(char))) == NULL) {
 				/* extreme mem shortage, try to solve
 				 * as good as we can. No point in calling
 				 * any alarms, they might as well run out
@@ -217,7 +217,7 @@ TCPSendBldFrame(tcpclt_t *pThis, char **pmsg, size_t *plen, int *pbMustBeFreed)
 		/* IETF20061218 iLenBuf =
 		  snprintf(szLenBuf, sizeof(szLenBuf)/sizeof(char), "%d ", len + iLenBuf);*/
 
-		if((buf = malloc((len + iLenBuf) * sizeof(char))) == NULL) {
+		if((buf = MALLOC((len + iLenBuf) * sizeof(char))) == NULL) {
 			/* we are out of memory. This is an extreme situation. We do not
 			 * call any alarm handlers because they most likely run out of mem,
 			 * too. We are brave enough to call debug output, though. Other than
@@ -324,7 +324,7 @@ Send(tcpclt_t *pThis, void *pData, char *msg, size_t len)
 				 * happens is that we lose our message recovery buffer - anything else would
 				 * be worse, so don't try anything ;) -- rgerhards, 2008-03-12
 				 */
-				if((pThis->prevMsg = malloc(len)) != NULL) {
+				if((pThis->prevMsg = MALLOC(len)) != NULL) {
 					memcpy(pThis->prevMsg, msg, len);
 					pThis->lenPrevMsg = len;
 				}

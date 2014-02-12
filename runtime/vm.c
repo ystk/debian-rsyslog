@@ -34,12 +34,15 @@
 #include "vm.h"
 #include "sysvar.h"
 #include "stringbuf.h"
+#include "unicode-helper.h"
 
 /* static data */
 DEFobjStaticHelpers
 DEFobjCurrIf(vmstk)
 DEFobjCurrIf(var)
 DEFobjCurrIf(sysvar)
+
+static pthread_mutex_t mutGetenv; /* we need to make this global because otherwise we can not guarantee proper init! */
 
 /* ------------------------------ function registry code and structures  ------------------------------ */
 
@@ -285,7 +288,7 @@ BEGINCMPOP(CMP_NEQ) /* remember to change the name also in the END macro! */
 	case VARTYPE_STR:
 		bRes = rsCStrCStrCmp(operand1->val.pStr, operand2->val.pStr);
 		break;
-ENDCMPOP(CMP_EQ)
+ENDCMPOP(CMP_NEQ)
 
 BEGINCMPOP(CMP_LT) /* remember to change the name also in the END macro! */
 	case VARTYPE_NUMBER:
@@ -471,6 +474,15 @@ CODESTARTop(PUSHSYSVAR)
 	CHKiRet(sysvar.GetVar(pOp->operand.pVar->val.pStr, &pVal));
 	vmstk.Push(pThis->pStk, pVal);
 finalize_it:
+	if(Debug && iRet != RS_RET_OK) {
+		if(iRet == RS_RET_SYSVAR_NOT_FOUND) {
+			DBGPRINTF("rainerscript: sysvar '%s' not found\n",
+				  rsCStrGetSzStrNoNULL(pOp->operand.pVar->val.pStr));
+		} else {
+			DBGPRINTF("rainerscript: error %d trying to obtain sysvar '%s'\n",
+				  iRet, rsCStrGetSzStrNoNULL(pOp->operand.pVar->val.pStr));
+		}
+	}
 ENDop(PUSHSYSVAR)
 
 /* The function call operation is only very roughly implemented. While the plumbing
@@ -536,6 +548,42 @@ rsf_strlen(vmstk_t *pStk, int numOperands)
 
 	/* Store result and cleanup */
 	var.SetNumber(operand1, iStrlen);
+	vmstk.Push(pStk, operand1);
+finalize_it:
+	RETiRet;
+}
+
+
+/* The getenv function. Note that we guard the OS call by a mutex, as that
+ * function is not guaranteed to be thread-safe. This implementation here is far from
+ * being optimal, at least we should cache the result. This is left TODO for
+ * a later revision.
+ * rgerhards, 2009-11-03
+ */
+static rsRetVal
+rsf_getenv(vmstk_t *pStk, int numOperands)
+{
+	DEFiRet;
+	var_t *operand1;
+	char *envResult;
+	cstr_t *pCstr;
+
+	if(numOperands != 1)
+		ABORT_FINALIZE(RS_RET_INVLD_NBR_ARGUMENTS);
+
+	/* pop args and do operaton (trivial case here...) */
+	vmstk.PopString(pStk, &operand1);
+	d_pthread_mutex_lock(&mutGetenv);
+	envResult = getenv((char*) rsCStrGetSzStr(operand1->val.pStr));
+	DBGPRINTF("rsf_getenv(): envvar '%s', return '%s'\n", rsCStrGetSzStr(operand1->val.pStr),
+		   envResult == NULL ? "(NULL)" : envResult);
+	iRet = rsCStrConstructFromszStr(&pCstr, (envResult == NULL) ? UCHAR_CONSTANT("") : (uchar*)envResult);
+	d_pthread_mutex_unlock(&mutGetenv);
+	if(iRet != RS_RET_OK)
+		FINALIZE; /* need to do this after mutex is unlocked! */
+
+	/* Store result and cleanup */
+	var.SetString(operand1, pCstr);
 	vmstk.Push(pStk, operand1);
 finalize_it:
 	RETiRet;
@@ -627,9 +675,11 @@ execProg(vm_t *pThis, vmprg_t *pProg)
 	ISOBJ_TYPE_assert(pThis, vm);
 	ISOBJ_TYPE_assert(pProg, vmprg);
 
-#define doOP(OP) case opcode_##OP: CHKiRet(op##OP(pThis, pCurrOp)); break
+#define doOP(OP) case opcode_##OP: DBGPRINTF("rainerscript: opcode %s\n", #OP); \
+				   CHKiRet(op##OP(pThis, pCurrOp)); break
 	pCurrOp = pProg->vmopRoot; /* TODO: do this via a method! */
 	while(pCurrOp != NULL && pCurrOp->opcode != opcode_END_PROG) {
+		DBGPRINTF("rainerscript: executing step, opcode %d...\n", pCurrOp->opcode);
 		switch(pCurrOp->opcode) {
 			doOP(OR);
 			doOP(AND);
@@ -656,8 +706,8 @@ execProg(vm_t *pThis, vmprg_t *pProg)
 			doOP(UNARY_MINUS);
 			doOP(FUNC_CALL);
 			default:
-				ABORT_FINALIZE(RS_RET_INVALID_VMOP);
 				dbgoprint((obj_t*) pThis, "invalid instruction %d in vmprg\n", pCurrOp->opcode);
+				ABORT_FINALIZE(RS_RET_INVALID_VMOP);
 				break;
 		}
 		/* so far, we have plain sequential execution, so on to next... */
@@ -670,6 +720,7 @@ execProg(vm_t *pThis, vmprg_t *pProg)
 	 */
 
 finalize_it:
+	DBGPRINTF("rainerscript: script execution terminated with state %d\n", iRet);
 	RETiRet;
 }
 
@@ -759,6 +810,8 @@ BEGINObjClassExit(vm, OBJ_IS_CORE_MODULE) /* class, version */
 	objRelease(sysvar, CORE_COMPONENT);
 	objRelease(var, CORE_COMPONENT);
 	objRelease(vmstk, CORE_COMPONENT);
+
+	pthread_mutex_destroy(&mutGetenv);
 ENDObjClassExit(vm)
 
 
@@ -779,6 +832,9 @@ BEGINObjClassInit(vm, 1, OBJ_IS_CORE_MODULE) /* class, version */
 	/* register built-in functions // TODO: move to its own module */
 	CHKiRet(rsfrAddFunction((uchar*)"strlen",  rsf_strlen));
 	CHKiRet(rsfrAddFunction((uchar*)"tolower", rsf_tolower));
+	CHKiRet(rsfrAddFunction((uchar*)"getenv",  rsf_getenv));
+
+	pthread_mutex_init(&mutGetenv, NULL);
 
 ENDObjClassInit(vm)
 

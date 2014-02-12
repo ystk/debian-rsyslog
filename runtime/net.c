@@ -69,6 +69,7 @@
 #endif
 
 MODULE_TYPE_LIB
+MODULE_TYPE_NOKEEP
 
 /* static data */
 DEFobjStaticHelpers
@@ -173,7 +174,7 @@ AddPermittedPeerWildcard(permittedPeers_t *pPeer, uchar* pszStr, size_t lenStr)
 		/* alloc memory for the domain component. We may waste a byte or
 		 * two, but that's ok.
 		 */
-		CHKmalloc(pNew->pszDomainPart = malloc(lenStr +1 ));
+		CHKmalloc(pNew->pszDomainPart = MALLOC(lenStr +1 ));
 	}
 
 	if(pszStr[0] == '*') {
@@ -502,8 +503,8 @@ static inline void MaskIP4 (struct in_addr  *addr, uint8_t bits) {
 	addr->s_addr &= htonl(0xffffffff << (32 - bits));
 }
 
-#define SIN(sa)  ((struct sockaddr_in  *)(sa))
-#define SIN6(sa) ((struct sockaddr_in6 *)(sa))
+#define SIN(sa)  ((struct sockaddr_in  *)(void*)(sa))
+#define SIN6(sa) ((struct sockaddr_in6 *)(void*)(sa))
 
 
 /* This is a cancel-safe getnameinfo() version, because we learned
@@ -695,7 +696,7 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 				case AF_INET: /* add IPv4 */
 					iSignificantBits = 32;
 					allowIP.flags = 0;
-					if((allowIP.addr.NetAddr = malloc(res->ai_addrlen)) == NULL) {
+					if((allowIP.addr.NetAddr = MALLOC(res->ai_addrlen)) == NULL) {
 						ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 					}
 					memcpy(allowIP.addr.NetAddr, res->ai_addr, res->ai_addrlen);
@@ -710,7 +711,7 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 						
 						iSignificantBits = 32;
 						allowIP.flags = 0;
-						if((allowIP.addr.NetAddr = malloc(sizeof(struct sockaddr_in)))
+						if((allowIP.addr.NetAddr = MALLOC(sizeof(struct sockaddr_in)))
 						    == NULL) {
 							ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 						}
@@ -721,7 +722,7 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 						SIN(allowIP.addr.NetAddr)->sin_port   = 0;
 						memcpy(&(SIN(allowIP.addr.NetAddr)->sin_addr.s_addr),
 							&(SIN6(res->ai_addr)->sin6_addr.s6_addr32[3]),
-							sizeof (struct sockaddr_in));
+							sizeof (in_addr_t));
 
 						if((iRet = AddAllowedSenderEntry(ppRoot, ppLast, &allowIP,
 								iSignificantBits))
@@ -732,7 +733,7 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 						
 						iSignificantBits = 128;
 						allowIP.flags = 0;
-						if((allowIP.addr.NetAddr = malloc(res->ai_addrlen)) == NULL) {
+						if((allowIP.addr.NetAddr = MALLOC(res->ai_addrlen)) == NULL) {
 							ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 						}
 						memcpy(allowIP.addr.NetAddr, res->ai_addr, res->ai_addrlen);
@@ -892,15 +893,18 @@ rsRetVal addAllowedSenderLine(char* pName, uchar** ppRestOfConfLine)
  * including IPv4/v6 as well as domain name wildcards.
  * This is a helper to isAllowedSender. As it is only called once, it is
  * declared inline.
- * Returns 0 if they do not match, something else otherwise.
- * contributed 1007-07-16 by mildew@gmail.com
+ * Returns 0 if they do not match, 1 if they match and 2 if a DNS name would have been required.
+ * contributed 2007-07-16 by mildew@gmail.com
  */
-static inline int MaskCmp(struct NetAddr *pAllow, uint8_t bits, struct sockaddr *pFrom, const char *pszFromHost)
+static inline int
+MaskCmp(struct NetAddr *pAllow, uint8_t bits, struct sockaddr *pFrom, const char *pszFromHost, int bChkDNS)
 {
 	assert(pAllow != NULL);
 	assert(pFrom != NULL);
 
 	if(F_ISSET(pAllow->flags, ADDR_NAME)) {
+		if(bChkDNS == 0)
+			return 2;
 		dbgprintf("MaskCmp: host=\"%s\"; pattern=\"%s\"\n", pszFromHost, pAllow->addr.HostWildcard);
 		
 #		if !defined(FNM_CASEFOLD)
@@ -967,18 +971,22 @@ static inline int MaskCmp(struct NetAddr *pAllow, uint8_t bits, struct sockaddr 
 /* check if a sender is allowed. The root of the the allowed sender.
  * list must be proveded by the caller. As such, this function can be
  * used to check both UDP and TCP allowed sender lists.
- * returns 1, if the sender is allowed, 0 otherwise.
+ * returns 1, if the sender is allowed, 0 if not and 2 if we could not 
+ * obtain a result because we would need a dns name, which we don't have
+ * (2 was added rgerhards, 2009-11-16).
  * rgerhards, 2005-09-26
  */
-static int isAllowedSender(uchar *pszType, struct sockaddr *pFrom, const char *pszFromHost)
+static int isAllowedSender2(uchar *pszType, struct sockaddr *pFrom, const char *pszFromHost, int bChkDNS)
 {
 	struct AllowedSenders *pAllow;
 	struct AllowedSenders *pAllowRoot;
+	int bNeededDNS = 0;	/* partial check because we could not resolve DNS? */
+	int ret;
 
 	assert(pFrom != NULL);
 	
 	if(setAllowRoot(&pAllowRoot, pszType) != RS_RET_OK)
-		return 0;	/* if something went wrong, we denie access - that's the better choice... */
+		return 0;	/* if something went wrong, we deny access - that's the better choice... */
 
 	if(pAllowRoot == NULL)
 		return 1; /* checking disabled, everything is valid! */
@@ -990,10 +998,20 @@ static int isAllowedSender(uchar *pszType, struct sockaddr *pFrom, const char *p
 	 * that the sender is disallowed.
 	 */
 	for(pAllow = pAllowRoot ; pAllow != NULL ; pAllow = pAllow->pNext) {
-		if (MaskCmp (&(pAllow->allowedSender), pAllow->SignificantBits, pFrom, pszFromHost))
+		ret = MaskCmp (&(pAllow->allowedSender), pAllow->SignificantBits, pFrom, pszFromHost, bChkDNS);
+		if(ret == 1)
 			return 1;
+		else if(ret == 2)
+			bNeededDNS = 2;
 	}
-	return 0;
+	return bNeededDNS;
+}
+
+
+/* legacy API, not to be used any longer */
+static int
+isAllowedSender(uchar *pszType, struct sockaddr *pFrom, const char *pszFromHost) {
+	return isAllowedSender2(pszType, pFrom, pszFromHost, 1);
 }
 
 
@@ -1165,12 +1183,12 @@ void debugListenInfo(int fd, char *type)
 		switch(sa.sa_family) {
 		case PF_INET:
 			szFamily = "IPv4";
-			ipv4 = (struct sockaddr_in*) &sa;
+			ipv4 = (struct sockaddr_in*)(void*) &sa;
 			port = ntohs(ipv4->sin_port);
 			break;
 		case PF_INET6:
 			szFamily = "IPv6";
-			ipv6 = (struct sockaddr_in6*) &sa;
+			ipv6 = (struct sockaddr_in6*)(void*) &sa;
 			port = ntohs(ipv6->sin6_port);
 			break;
 		default:
@@ -1306,7 +1324,7 @@ getLocalHostname(uchar **ppName)
 	do {
 		if(buf == NULL) {
 			buf_len = 128;        /* Initial guess */
-			CHKmalloc(buf = malloc(buf_len));
+			CHKmalloc(buf = MALLOC(buf_len));
 		} else {
 			buf_len += buf_len;
 			CHKmalloc(buf = realloc (buf, buf_len));
@@ -1370,7 +1388,7 @@ int *create_udp_socket(uchar *hostname, uchar *pszPort, int bIsServer)
         /* Count max number of sockets we may open */
         for (maxs = 0, r = res; r != NULL ; r = r->ai_next, maxs++)
 		/* EMPTY */;
-        socks = malloc((maxs+1) * sizeof(int));
+        socks = MALLOC((maxs+1) * sizeof(int));
         if (socks == NULL) {
                errmsg.LogError(0, NO_ERRCODE, "couldn't allocate memory for UDP sockets, suspending UDP message reception");
                freeaddrinfo(res);
@@ -1533,9 +1551,33 @@ static int CmpHost(struct sockaddr_storage *s1, struct sockaddr_storage* s2, siz
 		ret = memcmp(s1, s2, socklen);
 	}
 
-dbgprintf("CmpHost returns %d\n", ret);
 finalize_it:
 	return ret;
+}
+
+
+
+/* check if restrictions (ALCs) exists. The goal of this function is to disable the
+ * somewhat time-consuming ACL checks if no restrictions are defined (the usual case).
+ * This also permits to gain some speedup by using firewall-based ACLs instead of
+ * rsyslog ACLs (the recommended method.
+ * rgerhards, 2009-11-16
+ */
+static rsRetVal
+HasRestrictions(uchar *pszType, int *bHasRestrictions) {
+	struct AllowedSenders *pAllowRoot;
+	DEFiRet;
+
+	CHKiRet(setAllowRoot(&pAllowRoot, pszType));
+
+	*bHasRestrictions = (pAllowRoot == NULL) ? 0 : 1;
+
+finalize_it:
+	if(iRet != RS_RET_OK) {
+		*bHasRestrictions = 1; /* in this case it is better to check individually */
+		DBGPRINTF("Error %d trying to obtain ACL restriction state of '%s'\n", iRet, pszType);
+	}
+	RETiRet;
 }
 
 
@@ -1562,12 +1604,14 @@ CODESTARTobjQueryInterface(net)
 	pIf->create_udp_socket = create_udp_socket;
 	pIf->closeUDPListenSockets = closeUDPListenSockets;
 	pIf->isAllowedSender = isAllowedSender;
+	pIf->isAllowedSender2 = isAllowedSender2;
 	pIf->should_use_so_bsdcompat = should_use_so_bsdcompat;
 	pIf->getLocalHostname = getLocalHostname;
 	pIf->AddPermittedPeer = AddPermittedPeer;
 	pIf->DestructPermittedPeers = DestructPermittedPeers;
 	pIf->PermittedPeerWildcardMatch = PermittedPeerWildcardMatch;
 	pIf->CmpHost = CmpHost;
+	pIf->HasRestrictions = HasRestrictions;
 	/* data members */
 	pIf->pACLAddHostnameOnFail = &ACLAddHostnameOnFail;
 	pIf->pACLDontResolve = &ACLDontResolve;

@@ -2,25 +2,23 @@
  *
  * An implementation of the nsd select() interface for GnuTLS.
  * 
- * Copyright (C) 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright (C) 2008-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 
@@ -76,6 +74,9 @@ Add(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp)
 	if(pNsdGTLS->iMode == 1) {
 		if(waitOp == NSDSEL_RD && gtlsHasRcvInBuffer(pNsdGTLS)) {
 			++pThis->iBufferRcvReady;
+			dbgprintf("nsdsel_gtls: data already present in buffer, initiating "
+				  "dummy select %p->iBufferRcvReady=%d\n",
+				  pThis, pThis->iBufferRcvReady);
 			FINALIZE;
 		}
 		if(pNsdGTLS->rtryCall != gtlsRtry_None) {
@@ -109,6 +110,7 @@ Select(nsdsel_t *pNsdsel, int *piNumReady)
 	if(pThis->iBufferRcvReady > 0) {
 		/* we still have data ready! */
 		*piNumReady = pThis->iBufferRcvReady;
+		dbgprintf("nsdsel_gtls: doing dummy select, data present\n");
 	} else {
 		iRet = nsdsel_ptcp.Select(pThis->pTcp, piNumReady);
 	}
@@ -173,6 +175,7 @@ doRetry(nsd_gtls_t *pNsd)
 finalize_it:
 	if(iRet != RS_RET_OK && iRet != RS_RET_CLOSED && iRet != RS_RET_RETRY)
 		pNsd->bAbortConn = 1; /* request abort */
+dbgprintf("XXXXXX: doRetry: iRet %d, pNsd->bAbortConn %d\n", iRet, pNsd->bAbortConn);
 	RETiRet;
 }
 
@@ -190,6 +193,9 @@ IsReady(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp, int *pbIsReady)
 	if(pNsdGTLS->iMode == 1) {
 		if(waitOp == NSDSEL_RD && gtlsHasRcvInBuffer(pNsdGTLS)) {
 			*pbIsReady = 1;
+			--pThis->iBufferRcvReady; /* one "pseudo-read" less */
+			dbgprintf("nsdl_gtls: dummy read, decermenting %p->iBufRcvReady, now %d\n",
+				   pThis, pThis->iBufferRcvReady);
 			FINALIZE;
 		}
 		if(pNsdGTLS->rtryCall != gtlsRtry_None) {
@@ -197,6 +203,16 @@ IsReady(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp, int *pbIsReady)
 			/* we used this up for our own internal processing, so the socket
 			 * is not ready from the upper layer point of view.
 			 */
+			*pbIsReady = 0;
+			FINALIZE;
+		}
+		/* now we must ensure that we do not fall back to PTCP if we have
+		 * done a "dummy" select. In that case, we know when the predicate
+		 * is not matched here, we do not have data available for this
+		 * socket. -- rgerhards, 2010-11-20
+		 */
+		if(pThis->iBufferRcvReady) {
+			dbgprintf("nsd_gtls: dummy read, buffer not available for this FD\n");
 			*pbIsReady = 0;
 			FINALIZE;
 		}

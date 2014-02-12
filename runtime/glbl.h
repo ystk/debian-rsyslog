@@ -8,7 +8,7 @@
  * Please note that there currently is no glbl.c file as we do not yet
  * have any implementations.
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008, 2009 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -44,7 +44,6 @@ BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*Set##name)(dataType);
 	SIMP_PROP(MaxLine, int)
 	SIMP_PROP(OptimizeUniProc, int)
-	SIMP_PROP(HUPisRestart, int)
 	SIMP_PROP(PreserveFQDN, int)
 	SIMP_PROP(DefPFFamily, int)
 	SIMP_PROP(DropMalPTRMsgs, int)
@@ -62,9 +61,25 @@ BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
 	/* added v3, 2009-06-30 */
 	rsRetVal (*GenerateLocalHostNameProperty)(void);
 	prop_t* (*GetLocalHostNameProp)(void);
+	/* added v4, 2009-07-20 */
+	int (*GetGlobalInputTermState)(void);
+	void (*SetGlobalInputTermination)(void);
+	/* added v5, 2009-11-03 */
+	SIMP_PROP(ParseHOSTNAMEandTAG, int)
+	/* note: v4, v5 are already used by more recent versions, so we need to skip them! */
+	/* added v6, 2009-11-16 as part of varmojfekoj's "unlimited select()" patch
+	 * Note that it must be always present, otherwise the interface would have different
+	 * versions depending on compile settings, what is not acceptable.
+	 * Use this property with care, it is only truly available if UNLIMITED_SELECT is enabled
+	 * (I did not yet further investigate the details, because that code hopefully can be removed
+	 * at some later stage).
+	 */
+	SIMP_PROP(FdSetSize, int)
+	/* v7: was neeeded to mean v5+v6 - do NOT add anything else for that version! */
+	/* next change is v8! */
 #undef	SIMP_PROP
 ENDinterface(glbl)
-#define glblCURR_IF_VERSION 3 /* increment whenever you change the interface structure! */
+#define glblCURR_IF_VERSION 7 /* increment whenever you change the interface structure! */
 /* version 2 had PreserveFQDN added - rgerhards, 2008-12-08 */
 
 /* the remaining prototypes */

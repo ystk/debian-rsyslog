@@ -4,7 +4,8 @@
  * NOTE: read comments in module-template.h to understand how this file
  *       works!
  *
- * File begun on 2007-07-21 by RGerhards (extracted from syslogd.c)
+ * File begun on 2007-07-21 by RGerhards (extracted from syslogd.c, which
+ * at the time of the fork from sysklogd was under BSD license)
  *
  * A large re-write of this file was done in June, 2009. The focus was
  * to introduce many more features (like zipped writing), clean up the code
@@ -16,24 +17,23 @@
  * pipes. These have been moved to ompipe, to reduced the entanglement
  * between the two different functionalities. -- rgerhards
  *
- * Copyright 2007-2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -48,10 +48,13 @@
 #include <libgen.h>
 #include <unistd.h>
 #include <sys/file.h>
-
 #ifdef OS_SOLARIS
 #	include <fcntl.h>
 #endif
+#ifdef HAVE_ATOMIC_BUILTINS
+#	include <pthread.h>
+#endif
+
 
 #include "conf.h"
 #include "syslogd-types.h"
@@ -67,6 +70,7 @@
 #include "atomic.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 /* internal structures
  */
@@ -74,12 +78,41 @@ DEF_OMOD_STATIC_DATA
 DEFobjCurrIf(errmsg)
 DEFobjCurrIf(strm)
 
+/* for our current LRU mechanism, we need a monotonically increasing counters. We use
+ * it much like a "Lamport logical clock": we do not need the actual time, we just need
+ * to know the sequence in which files were accessed. So we use a simple counter to
+ * create that sequence. We use an unsigned 64 bit value which is extremely unlike to
+ * wrap within the lifetime of a process. If we process 1,000,000 file writes per
+ * second, the process could still exist over 500,000 years before a wrap to 0 happens.
+ * That should be sufficient (and even than, there would no really bad effect ;)).
+ * The variable below is the global counter/clock.
+ */
+#if HAVE_ATOMIC_BUILTINS_64BIT
+static uint64 clockFileAccess = 0;
+#else
+static unsigned clockFileAccess = 0;
+#endif
+/* and the "tick" function */
+#ifndef HAVE_ATOMIC_BUILTINS
+static pthread_mutex_t mutClock;
+#endif
+static inline uint64
+getClockFileAccess(void)
+{
+#if HAVE_ATOMIC_BUILTINS_64BIT
+	return ATOMIC_INC_AND_FETCH_uint64(&clockFileAccess, &mutClock);
+#else
+	return ATOMIC_INC_AND_FETCH_unsigned(&clockFileAccess, &mutClock);
+#endif
+}
+
+
 /* The following structure is a dynafile name cache entry.
  */
 struct s_dynaFileCacheEntry {
 	uchar *pName;		/* name currently open, if dynamic name */
 	strm_t	*pStrm;		/* our output stream */
-	time_t	lastUsed;	/* for LRU - last access */
+	uint64	clkTickAccessed;/* for LRU - based on clockFileAccess */
 };
 typedef struct s_dynaFileCacheEntry dynaFileCacheEntry;
 
@@ -89,11 +122,13 @@ typedef struct s_dynaFileCacheEntry dynaFileCacheEntry;
 #define USE_ASYNCWRITER_DFLT 0 	/* default buffer use async writer */
 #define FLUSHONTX_DFLT 1 	/* default for flush on TX end */
 
+#define DFLT_bForceChown 0
 /* globals for default values */
 static int iDynaFileCacheSize = 10; /* max cache for dynamic files */
 static int fCreateMode = 0644; /* mode to use when creating files */
 static int fDirCreateMode = 0700; /* mode to use when creating files */
 static int	bFailOnChown;	/* fail if chown fails? */
+static int	bForceChown = DFLT_bForceChown;	/* Force chown() on existing files? */
 static uid_t	fileUID;	/* UID to be used for newly created files */
 static uid_t	fileGID;	/* GID to be used for newly created files */
 static uid_t	dirUID;		/* UID to be used for newly created directories */
@@ -101,7 +136,7 @@ static uid_t	dirGID;		/* GID to be used for newly created directories */
 static int	bCreateDirs = 1;/* auto-create directories for dynaFiles: 0 - no, 1 - yes */
 static int	bEnableSync = 0;/* enable syncing of files (no dash in front of pathname in conf): 0 - no, 1 - yes */
 static int	iZipLevel = 0;	/* zip compression mode (0..9 as usual) */
-static bool	bFlushOnTXEnd = FLUSHONTX_DFLT;/* flush write buffers when transaction has ended? */
+static sbool	bFlushOnTXEnd = FLUSHONTX_DFLT;/* flush write buffers when transaction has ended? */
 static int64	iIOBufSize = IOBUF_DFLT_SIZE;	/* size of an io buffer */
 static int	iFlushInterval = FLUSH_INTRVL_DFLT; 	/* how often flush the output buffer on inactivity? */
 static int	bUseAsyncWriter = USE_ASYNCWRITER_DFLT;	/* should we enable asynchronous writing? */
@@ -118,6 +153,7 @@ typedef struct _instanceData {
 	int	fDirCreateMode;	/* creation mode for mkdir() */
 	int	bCreateDirs;	/* auto-create directories? */
 	int	bSyncFile;	/* should the file by sync()'ed? 1- yes, 0- no */
+	sbool	bForceChown;	/* force chown() on existing files? */
 	uid_t	fileUID;	/* IDs for creation */
 	uid_t	dirUID;
 	gid_t	fileGID;
@@ -136,8 +172,8 @@ typedef struct _instanceData {
 	int 	iZipLevel;		/* zip mode to use for this selector */
 	int	iIOBufSize;		/* size of associated io buffer */
 	int	iFlushInterval;		/* how fast flush buffer on inactivity? */
-	bool	bFlushOnTXEnd;		/* flush write buffers when transaction has ended? */
-	bool	bUseAsyncWriter;	/* use async stream writer? */
+	sbool	bFlushOnTXEnd;		/* flush write buffers when transaction has ended? */
+	sbool	bUseAsyncWriter;	/* use async stream writer? */
 } instanceData;
 
 
@@ -163,8 +199,9 @@ CODESTARTdbgPrintInstInfo
 	dbgprintf("\tflush interval=%d\n", pData->iFlushInterval);
 	dbgprintf("\tfile cache size=%d\n", pData->iDynaFileCacheSize);
 	dbgprintf("\tcreate directories: %s\n", pData->bCreateDirs ? "yes" : "no");
-	dbgprintf("\tfile owner %d, group %d\n", pData->fileUID, pData->fileGID);
-	dbgprintf("\tdirectory owner %d, group %d\n", pData->dirUID, pData->dirGID);
+	dbgprintf("\tfile owner %d, group %d\n", (int) pData->fileUID, (int) pData->fileGID);
+	dbgprintf("\tforce chown() for all files: %s\n", pData->bForceChown ? "yes" : "no"); 
+	dbgprintf("\tdirectory owner %d, group %d\n", (int) pData->dirUID, (int) pData->dirGID);
 	dbgprintf("\tdir create mode 0%3.3o, file create mode 0%3.3o\n",
 		  pData->fDirCreateMode, pData->fCreateMode);
 	dbgprintf("\tfail if owner/group can not be set: %s\n", pData->bFailOnChown ? "yes" : "no");
@@ -351,9 +388,24 @@ prepareFile(instanceData *pData, uchar *newFileName)
 	int fd;
 	DEFiRet;
 
-	if(access((char*)newFileName, F_OK) != 0) {
+	pData->pStrm = NULL;
+	if(access((char*)newFileName, F_OK) == 0) {
+		if(pData->bForceChown) {
+			/* Try to fix wrong ownership set by someone else. Note that this code
+			 * will no longer work once we have made the $PrivDrop code fully secure.
+			 * This change is based on an idea of Michael Terry, provided as part of
+			 * the effort to make rsyslogd the Ubuntu default syslogd.
+			 * rgerhards, 2009-09-11
+			 */
+			if(chown((char*)newFileName, pData->fileUID, pData->fileGID) != 0) {
+				if(pData->bFailOnChown) {
+					int eSave = errno;
+					errno = eSave;
+				}
+			}
+		}
+	} else {
 		/* file does not exist, create it (and eventually parent directories */
-		fd = -1;
 		if(pData->bCreateDirs) {
 			/* We first need to create parent dirs if they are missing.
 			 * We do not report any errors here ourselfs but let the code
@@ -372,7 +424,7 @@ prepareFile(instanceData *pData, uchar *newFileName)
 				pData->fCreateMode);
 		if(fd != -1) {
 			/* check and set uid/gid */
-			if(pData->fileUID != (uid_t)-1 || pData->fileGID != (gid_t) -1) {
+			if(pData->bForceChown || pData->fileUID != (uid_t)-1 || pData->fileGID != (gid_t) -1) {
 				/* we need to set owner/group */
 				if(fchown(fd, pData->fileUID, pData->fileGID) != 0) {
 					if(pData->bFailOnChown) {
@@ -422,6 +474,11 @@ prepareFile(instanceData *pData, uchar *newFileName)
 	CHKiRet(strm.ConstructFinalize(pData->pStrm));
 	
 finalize_it:
+	if(iRet != RS_RET_OK) {
+		if(pData->pStrm != NULL) {
+			strm.Destruct(&pData->pStrm);
+		}
+	}
 	RETiRet;
 }
 
@@ -437,7 +494,7 @@ finalize_it:
 static inline rsRetVal
 prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 {
-	time_t ttOldest; /* timestamp of oldest element */
+	uint64 ctOldest; /* "timestamp" of oldest element */
 	int iOldest;
 	int i;
 	int iFirstFree;
@@ -456,7 +513,7 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 	if(   (pData->iCurrElt != -1)
 	   && !ustrcmp(newFileName, pCache[pData->iCurrElt]->pName)) {
 	   	/* great, we are all set */
-		pCache[pData->iCurrElt]->lastUsed = time(NULL); /* update timestamp for LRU */ // TODO: optimize time call!
+		pCache[pData->iCurrElt]->clkTickAccessed = getClockFileAccess();
 		// LRU needs only a strictly monotonically increasing counter, so such a one could do
 		FINALIZE;
 	}
@@ -467,7 +524,7 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 	pData->iCurrElt = -1;	/* invalid current element pointer */
 	iFirstFree = -1; /* not yet found */
 	iOldest = 0; /* we assume the first element to be the oldest - that will change as we loop */
-	ttOldest = time(NULL) + 1; /* there must always be an older one */
+	ctOldest = getClockFileAccess(); /* there must always be an older one */
 	for(i = 0 ; i < pData->iCurrCacheSize ; ++i) {
 		if(pCache[i] == NULL || pCache[i]->pName == NULL) {
 			if(iFirstFree == -1)
@@ -477,12 +534,12 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 				/* we found our element! */
 				pData->pStrm = pCache[i]->pStrm;
 				pData->iCurrElt = i;
-				pCache[i]->lastUsed = time(NULL); /* update timestamp for LRU */
+				pCache[i]->clkTickAccessed = getClockFileAccess(); /* update "timestamp" for LRU */
 				FINALIZE;
 			}
 			/* did not find it - so lets keep track of the counters for LRU */
-			if(pCache[i]->lastUsed < ttOldest) {
-				ttOldest = pCache[i]->lastUsed;
+			if(pCache[i]->clkTickAccessed < ctOldest) {
+				ctOldest = pCache[i]->clkTickAccessed;
 				iOldest = i;
 				}
 		}
@@ -498,7 +555,7 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 	pData->iCurrElt = -1;
 	/* similarly, we need to set the current pStrm to NULL, because otherwise, if prepareFile() fails,
 	 * we may end up using an old stream. This bug depends on how exactly prepareFile fails,
-	 * but it* could be triggered in the common case of a failed open() system call.
+	 * but it could be triggered in the common case of a failed open() system call.
 	 * rgerhards, 2010-03-22
 	 */
 	pData->pStrm = NULL;
@@ -508,7 +565,6 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 		iFirstFree = pData->iCurrCacheSize++;
 	}
 
-// RG: this is the begin of a potential problem area
 	/* Note that the following code sequence does not work with the cache entry itself,
 	 * but rather with pData->pStrm, the (sole) stream pointer in the non-dynafile case.
 	 * The cache array is only updated after the open was successful. -- rgerhards, 2010-03-21
@@ -527,16 +583,17 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 	/* Ok, we finally can open the file */
 	localRet = prepareFile(pData, newFileName); /* ignore exact error, we check fd below */
 
-	/* file is either open now or an error state set */ // RG: better check localRet?
-	if(pData->pStrm == NULL) {
+	/* check if we had an error */
+	if(localRet != RS_RET_OK) {
 		/* do not report anything if the message is an internally-generated
 		 * message. Otherwise, we could run into a never-ending loop. The bad
 		 * news is that we also lose errors on startup messages, but so it is.
 		 */
 		if(iMsgOpts & INTERNAL_MSG) {
-			DBGPRINTF("Could not open dynaFile, discarding message\n");
+			DBGPRINTF("Could not open dynaFile '%s', state %d, discarding message\n",
+				  newFileName, localRet);
 		} else {
-			errmsg.LogError(0, NO_ERRCODE, "Could not open dynamic file '%s' - discarding message", newFileName);
+			errmsg.LogError(0, localRet, "Could not open dynamic file '%s' [state %d] - discarding message", newFileName, localRet);
 		}
 		ABORT_FINALIZE(localRet);
 	}
@@ -546,7 +603,7 @@ prepareDynFile(instanceData *pData, uchar *newFileName, unsigned iMsgOpts)
 		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 	}
 	pCache[iFirstFree]->pStrm = pData->pStrm;
-	pCache[iFirstFree]->lastUsed = time(NULL);
+	pCache[iFirstFree]->clkTickAccessed = getClockFileAccess();
 	pData->iCurrElt = iFirstFree;
 	DBGPRINTF("Added new entry %d for file cache, file '%s'.\n", iFirstFree, newFileName);
 
@@ -567,7 +624,7 @@ doWrite(instanceData *pData, uchar *pszBuf, int lenBuf)
 	ASSERT(pData != NULL);
 	ASSERT(pszBuf != NULL);
 
-dbgprintf("doWrite, pData->pStrm %p, lenBuf %d\n", pData->pStrm, lenBuf);
+dbgprintf("write to stream, pData->pStrm %p, lenBuf %d\n", pData->pStrm, lenBuf);
 	if(pData->pStrm != NULL){
 		CHKiRet(strm.Write(pData->pStrm, pszBuf, lenBuf));
 		FINALIZE;
@@ -607,8 +664,6 @@ finalize_it:
 		/* in v5, we shall return different states for message-caused failure (but only there!) */
 		if(pData->strmType == STREAMTYPE_NAMED_PIPE)
 			iRet = RS_RET_DISABLE_ACTION; /* this is the traditional semantic -- rgerhards, 2010-01-15 */
-		else
-			iRet = RS_RET_SUSPENDED;
 	}
 	RETiRet;
 }
@@ -633,20 +688,52 @@ BEGINtryResume
 CODESTARTtryResume
 ENDtryResume
 
+BEGINbeginTransaction
+CODESTARTbeginTransaction
+	/* we have nothing to do to begin a transaction */
+ENDbeginTransaction
+
+
+BEGINendTransaction
+CODESTARTendTransaction
+	/* Note: pStrm may be NULL if there was an error opening the stream */
+	if(pData->bFlushOnTXEnd && pData->pStrm != NULL) {
+		CHKiRet(strm.Flush(pData->pStrm));
+	}
+finalize_it:
+ENDendTransaction
+
+
 BEGINdoAction
 CODESTARTdoAction
 	DBGPRINTF("file to log to: %s\n", pData->f_fname);
 	CHKiRet(writeFile(ppString, iMsgOpts, pData));
-	if(pData->bFlushOnTXEnd) {
-		/* TODO v5: do this in endTransaction only! */
+	if(!bCoreSupportsBatching && pData->bFlushOnTXEnd) {
 		CHKiRet(strm.Flush(pData->pStrm));
 	}
 finalize_it:
+	if(iRet == RS_RET_OK)
+		iRet = RS_RET_DEFER_COMMIT;
 ENDdoAction
 
 
 BEGINparseSelectorAct
 CODESTARTparseSelectorAct
+	/* Note: the indicator sequence permits us to use '$' to signify
+	 * outchannel, what otherwise is not possible due to truely 
+	 * unresolvable grammar conflicts (*this time no way around*).
+	 * rgerhards, 2011-07-09
+	 */
+	if(!strncmp((char*) p, ":omfile:", sizeof(":omfile:") - 1)) {
+		p += sizeof(":omfile:") - 1;
+	} else {
+		if(*p == '$') {
+			errmsg.LogError(0, RS_RET_OUTDATED_STMT,
+				"action '%s' treated as ':omfile:%s' - please "
+				"change syntax, '%s' will not be supported in "
+				"rsyslog v6 and above.", p, p, p);
+		}
+	} 
 	if(!(*p == '$' || *p == '?' || *p == '/' || *p == '.' || *p == '-'))
 		ABORT_FINALIZE(RS_RET_CONFLINE_UNPROCESSED);
 
@@ -724,6 +811,7 @@ CODESTARTparseSelectorAct
 	pData->fDirCreateMode = fDirCreateMode;
 	pData->bCreateDirs = bCreateDirs;
 	pData->bFailOnChown = bFailOnChown;
+	pData->bForceChown = bForceChown;
 	pData->fileUID = fileUID;
 	pData->fileGID = fileGID;
 	pData->dirUID = dirUID;
@@ -742,7 +830,7 @@ CODESTARTparseSelectorAct
 		        
 	  	if(pData->pStrm == NULL) {
 			DBGPRINTF("Error opening log file: %s\n", pData->f_fname);
-			errmsg.LogError(0, RS_RET_NO_FILE_ACCESS, "Could no open output file '%s'", pData->f_fname);
+			errmsg.LogError(0, RS_RET_NO_FILE_ACCESS, "Could not open output file '%s'", pData->f_fname);
 		}
 	}
 CODE_STD_FINALIZERparseSelectorAct
@@ -759,6 +847,7 @@ static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __a
 	dirUID = -1;
 	dirGID = -1;
 	bFailOnChown = 1;
+	bForceChown = DFLT_bForceChown;
 	iDynaFileCacheSize = 10;
 	fCreateMode = 0644;
 	fDirCreateMode = 0700;
@@ -796,12 +885,14 @@ CODESTARTmodExit
 	objRelease(errmsg, CORE_COMPONENT);
 	objRelease(strm, CORE_COMPONENT);
 	free(pszFileDfltTplName);
+	DESTROY_ATOMIC_HELPER_MUT(mutClock);
 ENDmodExit
 
 
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_TXIF_OMOD_QUERIES /* we support the transactional interface! */
 CODEqueryEtryPt_doHUP
 ENDqueryEtryPt
 
@@ -812,6 +903,11 @@ CODESTARTmodInit
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
 	CHKiRet(objUse(strm, CORE_COMPONENT));
+
+	INIT_ATOMIC_HELPER_MUT(mutClock);
+
+	INITChkCoreFeature(bCoreSupportsBatching, CORE_FEATURE_BATCHING);
+	DBGPRINTF("omfile: %susing transactional output interface.\n", bCoreSupportsBatching ? "" : "not ");
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"dynafilecachesize", 0, eCmdHdlrInt, (void*) setDynaFileCacheSize, NULL, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"omfileziplevel", 0, eCmdHdlrInt, NULL, &iZipLevel, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"omfileflushinterval", 0, eCmdHdlrInt, NULL, &iFlushInterval, STD_LOADABLE_MODULE_ID));
@@ -826,6 +922,7 @@ CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"filecreatemode", 0, eCmdHdlrFileCreateMode, NULL, &fCreateMode, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"createdirs", 0, eCmdHdlrBinary, NULL, &bCreateDirs, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"failonchownfailure", 0, eCmdHdlrBinary, NULL, &bFailOnChown, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"omfileForceChown", 0, eCmdHdlrBinary, NULL, &bForceChown, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionfileenablesync", 0, eCmdHdlrBinary, NULL, &bEnableSync, STD_LOADABLE_MODULE_ID));
 	CHKiRet(regCfSysLineHdlr((uchar *)"actionfiledefaulttemplate", 0, eCmdHdlrGetWord, NULL, &pszFileDfltTplName, NULL));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));

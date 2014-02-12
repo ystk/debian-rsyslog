@@ -10,24 +10,23 @@
  * of the "old" message code without any modifications. However, it
  * helps to have things at the right place one we go to the meat of it.
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -42,15 +41,26 @@
 #include "module-template.h"
 #include "errmsg.h"
 #include "msg.h"
+#include "srUtils.h"
+#include "glbl.h"
 
 MODULE_TYPE_INPUT
+MODULE_TYPE_NOKEEP
 
 /* defines */
 #define DEFAULT_MARK_PERIOD (20 * 60)
 
 /* Module static data */
 DEF_IMOD_STATIC_DATA
+DEFobjCurrIf(glbl)
 static int iMarkMessagePeriod = DEFAULT_MARK_PERIOD;
+
+BEGINisCompatibleWithFeature
+CODESTARTisCompatibleWithFeature
+	if(eFeat == sFEATURENonCancelInputTermination)
+		iRet = RS_RET_OK;
+ENDisCompatibleWithFeature
+
 
 /* This function is called to gather input. It must terminate only
  * a) on failure (iRet set accordingly)
@@ -71,16 +81,14 @@ CODESTARTrunInput
 	 * right into the sleep below.
 	 */
 	while(1) {
-		/* we do not need to handle the RS_RET_TERMINATE_NOW case any
-	   	 * special because we just need to terminate. This may be different
-	   	 * if a cleanup is needed. But for now, we can just use CHKiRet().
-	   	 * rgerhards, 2007-12-17
-	   	 */
-		CHKiRet(thrdSleep(pThrd, iMarkMessagePeriod, 0)); /* seconds, micro seconds */
+		srSleep(iMarkMessagePeriod, 0); /* seconds, micro seconds */
+
+		if(glbl.GetGlobalInputTermState() == 1)
+			break; /* terminate input! */
+
+		dbgprintf("immark: injecting mark message\n");
 		logmsgInternal(NO_ERRCODE, LOG_INFO, (uchar*)"-- MARK --", MARK);
 	}
-finalize_it:
-	return iRet;
 ENDrunInput
 
 
@@ -106,6 +114,7 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_IMOD_QUERIES
+CODEqueryEtryPt_IsCompatibleWithFeature_IF_OMOD_QUERIES
 ENDqueryEtryPt
 
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
@@ -119,9 +128,9 @@ BEGINmodInit()
 CODESTARTmodInit
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
+	CHKiRet(objUse(glbl, CORE_COMPONENT));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"markmessageperiod", 0, eCmdHdlrInt, NULL, &iMarkMessagePeriod, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
 ENDmodInit
-/*
- * vi:set ai:
+/* vi:set ai:
  */

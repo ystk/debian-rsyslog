@@ -12,7 +12,7 @@
  *
  * File begun on 2007-07-22 by RGerhards
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2009 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -51,9 +51,11 @@
 #define CURR_MOD_IF_VERSION 5
 
 typedef enum eModType_ {
-	eMOD_IN,	/* input module */
-	eMOD_OUT,	/* output module */
-	eMOD_LIB	/* library module - this module provides one or many interfaces */
+	eMOD_IN = 0,	/* input module */
+	eMOD_OUT = 1,	/* output module */
+	eMOD_LIB = 2,	/* library module */
+	eMOD_PARSER = 3,/* parser module */
+	eMOD_STRGEN = 4	/* strgen module */
 } eModType_t;
 
 
@@ -73,12 +75,26 @@ typedef enum eModLinkType_ {
 	eMOD_LINK_ALL			/* special: all linkage types, e.g. for unload */
 } eModLinkType_t;
 
-typedef struct modInfo_s {
+/* remember which shared libs we dlopen()-ed */
+struct dlhandle_s {
+	uchar	*pszName;
+	void	*pModHdlr;
+	struct	dlhandle_s *next;
+};
+
+/* should this module be kept linked? */
+typedef enum eModKeepType_ {
+	eMOD_NOKEEP,
+	eMOD_KEEP
+} eModKeepType_t;
+
+struct modInfo_s {
 	struct modInfo_s *pPrev;	/* support for creating a double linked module list */
 	struct modInfo_s *pNext;	/* support for creating a linked module list */
 	int		iIFVers;	/* Interface version of module */
 	eModType_t	eType;		/* type of this module */
 	eModLinkType_t	eLinkType;
+	eModKeepType_t	eKeepType;	/* keep the module dynamically linked on unload */
 	uchar*		pszName;	/* printable module name, e.g. for dbgprintf */
 	unsigned	uRefCnt;	/* reference count for this module; 0 -> may be unloaded */
 	/* functions supported by all types of modules */
@@ -111,11 +127,20 @@ typedef struct modInfo_s {
 		struct {/* data for output modules */
 			/* below: perform the configured action
 			 */
+			rsRetVal (*beginTransaction)(void*);
 			rsRetVal (*doAction)(uchar**, unsigned, void*);
+			rsRetVal (*endTransaction)(void*);
 			rsRetVal (*parseSelectorAct)(uchar**, void**,omodStringRequest_t**);
 		} om;
 		struct { /* data for library modules */
-		} fm;
+		    	char dummy;
+		} lm;
+		struct { /* data for parser modules */
+			rsRetVal (*parse)(msg_t*);
+		} pm;
+		struct { /* data for strgen modules */
+			rsRetVal (*strgen)(msg_t*, uchar**, size_t *);
+		} sm;
 	} mod;
 	void *pModHdlr; /* handler to the dynamic library holding the module */
 #	ifdef DEBUG
@@ -124,7 +149,8 @@ typedef struct modInfo_s {
 	 */
 	modUsr_t *pModUsrRoot;
 #	endif
-} modInfo_t;
+};
+
 
 /* interfaces */
 BEGINinterface(module) /* name must also be changed in ENDinterface macro! */
@@ -148,8 +174,4 @@ PROTOTYPEObj(module);
 /* TODO: remove them below (means move the config init code) -- rgerhards, 2008-02-19 */
 extern uchar *pModDir; /* read-only after startup */
 
-
 #endif /* #ifndef MODULES_H_INCLUDED */
-/*
- * vi:set ai:
- */

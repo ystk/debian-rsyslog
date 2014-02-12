@@ -47,6 +47,7 @@
 #include <signal.h>
 #include <netinet/in.h>
 #include <getopt.h>
+#include <errno.h>
 #include <ctype.h>
 
 #define EXIT_FAILURE 1
@@ -62,7 +63,8 @@ static char *testSuite = NULL; /* name of current test suite */
 static int iPort = 12514; /* port which shall be used for sending data */
 static char* pszCustomConf = NULL;	/* custom config file, use -c conf to specify */
 static int verbose = 0;	/* verbose output? -v option */
-static int useDebugEnv = 0; /* activate debugging environment (for rsyslog debug log)? */
+static int IPv4Only = 0;	/* use only IPv4 in rsyslogd call? */
+static char **ourEnvp;
 
 /* these two are quick hacks... */
 int iFailed = 0;
@@ -92,6 +94,7 @@ void readLine(int fd, char *ln)
 	if(verbose)
 		fprintf(stderr, "begin readLine\n");
 	lenRead = read(fd, &c, 1);
+
 	while(lenRead == 1 && c != '\n') {
 		if(c == '\0') {
 			*ln = c;
@@ -103,6 +106,11 @@ void readLine(int fd, char *ln)
 		lenRead = read(fd, &c, 1);
 	}
 	*ln = '\0';
+
+	if(lenRead < 0) {
+		printf("read from rsyslogd returned with error '%s' - aborting test\n", strerror(errno));
+		exit(1);
+	}
 
 	if(verbose)
 		fprintf(stderr, "end readLine, val read '%s'\n", orig);
@@ -117,6 +125,10 @@ void readLine(int fd, char *ln)
  * We use traditional framing '\n' at EOR for this tester. It may be
  * worth considering additional framing modes.
  * rgerhards, 2009-04-08
+ * Note: we re-create the socket within the retry loop, because this
+ * seems to be needed under Solaris. If we do not do that, we run
+ * into troubles (maybe something wrongly initialized then?)
+ * -- rgerhards, 2010-04-12
  */
 int
 tcpSend(char *buf, int lenBuf)
@@ -124,52 +136,68 @@ tcpSend(char *buf, int lenBuf)
 	static int sock = INVALID_SOCKET;
 	struct sockaddr_in addr;
 	int retries;
+	int ret;
+	int iRet = 0; /* 0 OK, anything else error */
 
 	if(sock == INVALID_SOCKET) {
 		/* first time, need to connect to target */
-		if((sock=socket(AF_INET, SOCK_STREAM, 0))==-1) {
-			perror("socket()");
-			return(1);
-		}
-
-		memset((char *) &addr, 0, sizeof(addr));
-		addr.sin_family = AF_INET;
-		addr.sin_port = htons(iPort);
-		if(inet_aton("127.0.0.1", &addr.sin_addr)==0) {
-			fprintf(stderr, "inet_aton() failed\n");
-			return(1);
-		}
 		retries = 0;
 		while(1) { /* loop broken inside */
-			if(connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+			/* first time, need to connect to target */
+			if((sock=socket(AF_INET, SOCK_STREAM, 0))==-1) {
+				perror("socket()");
+				iRet = 1;
+				goto finalize_it;
+			}
+			memset((char *) &addr, 0, sizeof(addr));
+			addr.sin_family = AF_INET;
+			addr.sin_port = htons(iPort);
+			if(inet_aton("127.0.0.1", &addr.sin_addr)==0) {
+				fprintf(stderr, "inet_aton() failed\n");
+				iRet = 1;
+				goto finalize_it;
+			}
+			if((ret = connect(sock, (struct sockaddr*)&addr, sizeof(addr))) == 0) {
 				break;
 			} else {
 				if(retries++ == 50) {
-					++iFailed;
 					fprintf(stderr, "connect() failed\n");
-					return(1);
+					iRet = 1;
+					goto finalize_it;
 				} else {
-					usleep(100000); /* 0.1 sec, these are us! */
+					usleep(100000); /* ms = 1000 us! */
 				}
 			}
 		} 
 	}
 
 	/* send test data */
-	if(send(sock, buf, lenBuf, 0) != lenBuf) {
+	if((ret = send(sock, buf, lenBuf, 0)) != lenBuf) {
 		perror("send test data");
-		fprintf(stderr, "send() failed\n");
-		return(1);
+		fprintf(stderr, "send() failed, sock=%d, ret=%d\n", sock, ret);
+		iRet = 1;
+		goto finalize_it;
 	}
 
 	/* send record terminator */
 	if(send(sock, "\n", 1, 0) != 1) {
 		perror("send record terminator");
 		fprintf(stderr, "send() failed\n");
-		return(1);
+		iRet = 1;
+		goto finalize_it;
 	}
 
-	return 0;
+finalize_it:
+	if(iRet != 0) {
+		/* need to do some (common) cleanup */
+		if(sock != INVALID_SOCKET) {
+			close(sock);
+			sock = INVALID_SOCKET;
+		}
+		++iFailed;
+	}
+
+	return iRet;
 }
 
 
@@ -216,15 +244,15 @@ int openPipe(char *configFile, pid_t *pid, int *pfd)
 	int pipefd[2];
 	pid_t cpid;
 	char *newargv[] = {"../tools/rsyslogd", "dummy", "-c4", "-u2", "-n", "-irsyslog.pid",
-			   "-M../runtime/.libs:../.libs", NULL };
+			   "-M../runtime/.libs:../.libs", NULL, NULL};
 	char confFile[1024];
-	char *newenviron[] = { NULL };
-	char *newenvironDeb[] = { "RSYSLOG_DEBUG=debug nostdout",
-				"RSYSLOG_DEBUGLOG=log", NULL };
 
 	sprintf(confFile, "-f%s/testsuites/%s.conf", srcdir,
 		(pszCustomConf == NULL) ? configFile : pszCustomConf);
 	newargv[1] = confFile;
+
+	if(IPv4Only)
+		newargv[(sizeof(newargv)/sizeof(char*)) - 2] = "-4";
 
 	if (pipe(pipefd) == -1) {
 		perror("pipe");
@@ -243,8 +271,9 @@ int openPipe(char *configFile, pid_t *pid, int *pfd)
 		close(pipefd[1]);
 		close(pipefd[0]);
 		fclose(stdin);
-		execve("../tools/rsyslogd", newargv, (useDebugEnv) ? newenvironDeb : newenviron);
+		execve("../tools/rsyslogd", newargv, ourEnvp);
 	} else {            
+		usleep(10000);
 		close(pipefd[1]);
 		*pid = cpid;
 		*pfd = pipefd[0];
@@ -364,13 +393,19 @@ processTestFile(int fd, char *pszFileName)
 		expected[strlen(expected)-1] = '\0'; /* remove \n */
 
 		/* pull response from server and then check if it meets our expectation */
+//printf("try pull pipe...\n");
 		readLine(fd, buf);
+		if(strlen(buf) == 0) {
+			printf("something went wrong - read a zero-length string from rsyslogd\n");
+			exit(1);
+		}
 		if(strcmp(expected, buf)) {
 			++iFailed;
-			printf("\nExpected Response:\n'%s'\nActual Response:\n'%s'\n",
-				expected, buf);
+			printf("\nFile %s:\nExpected Response:\n'%s'\nActual Response:\n'%s'\n",
+				pszFileName, expected, buf);
 				ret = 1;
 		}
+
 		/* we need to free buffers, as we have potentially modified them! */
 		free(testdata);
 		testdata = NULL;
@@ -378,7 +413,6 @@ processTestFile(int fd, char *pszFileName)
 		expected = NULL;
 	}
 
-	free(expected);
 	fclose(fp);
 	return(ret);
 }
@@ -426,16 +460,30 @@ doTests(int fd, char *files)
 		printf("Error: no test cases found, no tests executed.\n");
 		iFailed = 1;
 	} else {
-		printf("Number of tests run: %d, number of failures: %d\n", iTests, iFailed);
+		printf("Number of tests run: %3d, number of failures: %d, test: %s/%s\n",
+		       iTests, iFailed, testSuite, inputMode2Str(inputMode));
 	}
 
 	return(iFailed);
 }
 
+
+/* indicate that our child has died (where it is not permitted to!).
+ */
+void childDied(__attribute__((unused)) int sig)
+{
+	printf("ERROR: child died unexpectedly (maybe a segfault?)!\n");
+	exit(1);
+}
+
+
 /* cleanup */
 void doAtExit(void)
 {
 	int status;
+
+	/* disarm died-child handler */
+	signal(SIGCHLD, SIG_IGN);
 
 	if(rsyslogdPid != 0) {
 		kill(rsyslogdPid, SIGTERM);
@@ -450,7 +498,7 @@ void doAtExit(void)
  * of this file.
  * rgerhards, 2009-04-03
  */
-int main(int argc, char *argv[])
+int main(int argc, char *argv[], char *envp[])
 {
 	int fd;
 	int opt;
@@ -459,13 +507,14 @@ int main(int argc, char *argv[])
 	char buf[4096];
 	char testcases[4096];
 
-	while((opt = getopt(argc, argv, "dc:i:p:t:v")) != EOF) {
+	ourEnvp = envp;
+	while((opt = getopt(argc, argv, "4c:i:p:t:v")) != EOF) {
 		switch((char)opt) {
+                case '4':
+			IPv4Only = 1;
+			break;
                 case 'c':
 			pszCustomConf = optarg;
-			break;
-                case 'd': 
-			useDebugEnv = 1;
 			break;
                 case 'i':
 			if(!strcmp(optarg, "udp"))
@@ -520,6 +569,14 @@ int main(int argc, char *argv[])
 	}
 	fclose(fp);
 
+	/* arm died-child handler */
+	signal(SIGCHLD, childDied);
+
+	/* make sure we do not abort if there is an issue with pipes.
+	 * our code does the necessary error handling.
+	 */
+	sigset(SIGPIPE, SIG_IGN);
+
 	/* start to be tested rsyslogd */
 	openPipe(testSuite, &rsyslogdPid, &fd);
 	readLine(fd, buf);
@@ -530,5 +587,6 @@ int main(int argc, char *argv[])
 		ret = 1;
 
 	if(verbose) printf("End of nettester run (%d).\n", ret);
+
 	exit(ret);
 }
