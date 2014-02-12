@@ -1,14 +1,27 @@
 if ENABLE_TESTBENCH
 TESTRUNS = rt_init rscript
-check_PROGRAMS = $(TESTRUNS) ourtail nettester tcpflood chkseq randomgen
-TESTS = $(TESTRUNS) cfg.sh \
+check_PROGRAMS = $(TESTRUNS) ourtail nettester tcpflood chkseq msleep randomgen diagtalker uxsockrcvr syslog_caller syslog_inject inputfilegen
+TESTS = $(TESTRUNS) cfg.sh
+
+if ENABLE_IMDIAG
+TESTS +=  \
+	arrayqueue.sh \
+	da-mainmsg-q.sh \
 	validation-run.sh \
 	imtcp-multiport.sh \
+	daqueue-persist.sh \
 	diskqueue.sh \
 	diskqueue-fsync.sh \
+	rulesetmultiqueue.sh \
 	manytcp.sh \
+	rsf_getenv.sh \
+	imtcp_conndrop.sh \
+	imtcp_addtlframedelim.sh \
 	sndrcv.sh \
+	sndrcv_failover.sh \
 	sndrcv_gzip.sh \
+	sndrcv_udp.sh \
+	sndrcv_udp_nonstdpt.sh \
 	asynwr_simple.sh \
 	asynwr_timeout.sh \
 	asynwr_small.sh \
@@ -25,9 +38,82 @@ TESTS = $(TESTRUNS) cfg.sh \
 	dynfile_invalid2.sh \
 	complex1.sh \
 	queue-persist.sh \
-	pipeaction.sh
+	pipeaction.sh \
 	execonlyonce.sh \
-	queue-persist.sh 
+	execonlywhenprevsuspended.sh \
+	execonlywhenprevsuspended2.sh \
+	execonlywhenprevsuspended3.sh \
+	execonlywhenprevsuspended4.sh \
+	pipe_noreader.sh \
+	dircreate_dflt.sh \
+	dircreate_off.sh \
+	imuxsock_logger_root.sh \
+	imuxsock_traillf_root.sh \
+	imuxsock_ccmiddle_root.sh \
+	discard-rptdmsg.sh \
+	discard-allmark.sh \
+	discard.sh \
+	failover-async.sh \
+	failover-double.sh \
+	failover-basic.sh \
+	failover-rptd.sh \
+	failover-no-rptd.sh \
+	failover-no-basic.sh \
+	rcvr_fail_restore.sh \
+	linkedlistqueue.sh
+endif
+
+if HAVE_VALGRIND
+TESTS +=  \
+	discard-rptdmsg-vg.sh \
+	discard-allmark-vg.sh \
+	failover-basic-vg.sh \
+	failover-rptd-vg.sh \
+	failover-no-basic-vg.sh \
+	failover-no-rptd-vg.sh \
+	tcp-msgreduc-vg.sh
+endif
+
+
+if ENABLE_MYSQL_TESTS
+TESTS +=  \
+	mysql-basic.sh \
+	mysql-asyn.sh 
+if ENABLE_OMLIBDBI
+TESTS +=  \
+	libdbi-basic.sh \
+	libdbi-asyn.sh
+endif
+if HAVE_VALGRIND
+TESTS +=  \
+	mysql-basic-vg.sh \
+	mysql-asyn-vg.sh 
+endif
+endif
+
+if ENABLE_IMPTCP
+TESTS +=  \
+	manyptcp.sh \
+	imptcp_large.sh \
+	imptcp_addtlframedelim.sh \
+	imptcp_conndrop.sh 
+endif
+
+if ENABLE_GNUTLS
+if HAVE_VALGRIND
+# This test does not work on v5 as we keep DH params
+#TESTS += manytcp-too-few-tls.sh
+endif
+endif
+
+if ENABLE_OMUXSOCK
+TESTS += uxsock_simple.sh
+endif
+
+if ENABLE_OMUDPSPOOF
+TESTS += sndrcv_omudpspoof.sh \
+	 sndrcv_omudpspoof_nonstdpt.sh
+endif
 
 if ENABLE_OMSTDOUT
 TESTS += omod-if-array.sh \
@@ -37,19 +123,34 @@ TESTS += omod-if-array.sh \
 	 inputname.sh \
 	 threadingmq.sh \
 	 threadingmqaq.sh \
+	 badqi.sh \
+	 tabescape_dflt.sh \
+	 tabescape_off.sh \
 	 fieldtest.sh
+endif
+
+if ENABLE_OMRULESET
+if ENABLE_IMDIAG
+TESTS += omruleset.sh \
+	 omruleset-queue.sh
+endif
 endif
 
 if ENABLE_EXTENDED_TESTS
 TESTS += random.sh 
 endif
 
-check_JAVA = DiagTalker.java
+if ENABLE_IMFILE
+TESTS += imfile-basic.sh
+if HAVE_VALGRIND
+TESTS += imfile-basic-vg.sh
+endif
+endif
 
 endif # if ENABLE_TESTBENCH
 
 TESTS_ENVIRONMENT = RSYSLOG_MODDIR='$(abs_top_builddir)'/runtime/.libs/
-DISTCLEANFILES=rsyslog.pid '$(abs_top_builddir)'/DiagTalker.class
+DISTCLEANFILES=rsyslog.pid
 test_files = testbench.h runtime-dummy.c
 
 EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
@@ -92,11 +193,17 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/master.tspgsql \
 	   testsuites/subsecond.conf \
 	   testsuites/master.subsecond \
+	   testsuites/parse_8bit_escape.conf \
+	   testsuites/8bit.parse_8bit_escape \
 	   testsuites/parse1.conf \
 	   testsuites/field1.conf \
 	   testsuites/1.parse1 \
 	   testsuites/2.parse1 \
 	   testsuites/3.parse1 \
+	   testsuites/4.parse1 \
+	   testsuites/mark.parse1 \
+	   testsuites/8bit.parse1 \
+	   testsuites/empty.parse1 \
 	   testsuites/snare.parse1 \
 	   testsuites/oversizeTag-1.parse1 \
 	   testsuites/weird.parse1 \
@@ -110,6 +217,10 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/rfc5424-2.parse1 \
 	   testsuites/rfc5424-3.parse1 \
 	   testsuites/rfc5424-4.parse1 \
+	   testsuites/malformed1.parse1 \
+	   testsuites/reallife.parse1 \
+	   testsuites/parse2.conf \
+	   testsuites/reallife.parse2 \
 	   testsuites/parse3.conf \
 	   testsuites/reallife.parse3 \
 	   testsuites/parse-nodate.conf \
@@ -128,23 +239,74 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   killrsyslog.sh \
 	   parsertest.sh \
 	   fieldtest.sh \
+	   rsf_getenv.sh \
+	   testsuites/rsf_getenv.conf \
 	   diskqueue.sh \
 	   testsuites/diskqueue.conf \
+	   arrayqueue.sh \
+	   testsuites/arrayqueue.conf \
+	   linkedlistqueue.sh \
+	   testsuites/linkedlistqueue.conf \
+	   da-mainmsg-q.sh \
+	   testsuites/da-mainmsg-q.conf \
 	   diskqueue-fsync.sh \
 	   testsuites/diskqueue-fsync.conf \
 	   imtcp-multiport.sh \
 	   testsuites/imtcp-multiport.conf \
 	   manytcp.sh \
 	   testsuites/manytcp.conf \
+	   manyptcp.sh \
+	   testsuites/manyptcp.conf \
+	   imptcp_large.sh \
+	   testsuites/imptcp_large.conf \
+	   imptcp_addtlframedelim.sh \
+	   testsuites/imptcp_addtlframedelim.conf \
+	   imptcp_conndrop.sh \
+	   testsuites/imptcp_conndrop.conf \
+	   imtcp_conndrop.sh \
+	   testsuites/imtcp_conndrop.conf \
+	   imtcp_addtlframedelim.sh \
+	   testsuites/imtcp_addtlframedelim.conf \
+	   tcp-msgreduc-vg.sh \
+	   testsuites/./tcp-msgreduc-vg.conf \
 	   inputname.sh \
 	   testsuites/inputname_imtcp.conf \
 	   testsuites/1.inputname_imtcp_12514 \
 	   testsuites/1.inputname_imtcp_12515 \
 	   testsuites/1.inputname_imtcp_12516 \
 	   omod-if-array.sh \
+	   discard.sh \
+	   testsuites/discard.conf \
+	   failover-no-rptd.sh \
+	   failover-no-rptd-vg.sh \
+	   testsuites/failover-no-rptd.conf \
+	   failover-no-basic.sh \
+	   failover-no-basic-vg.sh \
+	   testsuites/failover-no-basic.conf \
+	   failover-rptd.sh \
+	   failover-rptd-vg.sh \
+	   testsuites/failover-rptd.conf \
+	   failover-basic.sh \
+	   failover-basic-vg.sh \
+	   testsuites/failover-basic.conf \
+	   failover-async.sh \
+	   testsuites/failover-async.conf \
+	   failover-double.sh \
+	   testsuites/failover-double.conf \
+	   discard-rptdmsg.sh \
+	   discard-rptdmsg-vg.sh \
+	   testsuites/discard-rptdmsg.conf \
+	   discard-allmark.sh \
+	   discard-allmark-vg.sh \
+	   testsuites/discard-allmark.conf \
 	   diag.sh \
 	   testsuites/diag-common.conf \
 	   testsuites/diag-common2.conf \
+           rcvr_fail_restore.sh \
+	   testsuites/rcvr_fail_restore_rcvr.conf \
+	   testsuites/rcvr_fail_restore_sender.conf \
+           daqueue-persist.sh \
+	   daqueue-persist-drvr.sh \
 	   queue-persist.sh \
 	   queue-persist-drvr.sh \
 	   testsuites/queue-persist.conf \
@@ -153,14 +315,34 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   threadingmqaq.sh \
 	   testsuites/threadingmqaq.conf \
 	   sndrcv_drvr.sh \
+	   sndrcv_drvr_noexit.sh \
+	   sndrcv_failover.sh \
+	   testsuites/sndrcv_failover_sender.conf \
+	   testsuites/sndrcv_failover_rcvr.conf \
 	   sndrcv.sh \
 	   testsuites/sndrcv_sender.conf \
 	   testsuites/sndrcv_rcvr.conf \
+	   sndrcv_udp.sh \
+	   testsuites/sndrcv_udp_sender.conf \
+	   testsuites/sndrcv_udp_rcvr.conf \
+	   sndrcv_udp_nonstdpt.sh \
+	   testsuites/sndrcv_udp_nonstdpt_sender.conf \
+	   testsuites/sndrcv_udp_nonstdpt_rcvr.conf \
+	   sndrcv_omudpspoof.sh \
+	   testsuites/sndrcv_omudpspoof_sender.conf \
+	   testsuites/sndrcv_omudpspoof_rcvr.conf \
+	   sndrcv_omudpspoof_nonstdpt.sh \
+	   testsuites/sndrcv_omudpspoof_nonstdpt_sender.conf \
+	   testsuites/sndrcv_omudpspoof_nonstdpt_rcvr.conf \
 	   sndrcv_gzip.sh \
 	   testsuites/sndrcv_gzip_sender.conf \
 	   testsuites/sndrcv_gzip_rcvr.conf \
 	   pipeaction.sh \
 	   testsuites/pipeaction.conf \
+	   pipe_noreader.sh \
+	   testsuites/pipe_noreader.conf \
+	   uxsock_simple.sh \
+	   testsuites/uxsock_simple.conf \
 	   asynwr_simple.sh \
 	   testsuites/asynwr_simple.conf \
 	   asynwr_timeout.sh \
@@ -187,6 +369,9 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/complex1.conf \
 	   random.sh \
 	   testsuites/random.conf \
+	   imfile-basic.sh \
+	   imfile-basic-vg.sh \
+	   testsuites/imfile-basic.conf \
 	   dynfile_invld_async.sh \
 	   dynfile_invld_sync.sh \
 	   dynfile_cachemiss.sh \
@@ -198,20 +383,84 @@ EXTRA_DIST= 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/master.rfctag \
 	   testsuites/nolimittag.conf \
 	   testsuites/master.nolimittag \
+	   rulesetmultiqueue.sh \
+	   testsuites/rulesetmultiqueue.conf \
+	   omruleset.sh \
+	   testsuites/omruleset.conf \
+	   omruleset-queue.sh \
+	   testsuites/omruleset-queue.conf \
+	   badqi.sh \
+	   testsuites/badqi.conf \
+	   bad_qi/dbq.qi \
 	   execonlyonce.sh \
 	   testsuites/execonlyonce.conf \
 	   testsuites/execonlyonce.data \
-	   DiagTalker.java \
+	   execonlywhenprevsuspended.sh \
+	   testsuites/execonlywhenprevsuspended.conf \
+	   execonlywhenprevsuspended2.sh \
+	   testsuites/execonlywhenprevsuspended2.conf \
+	   execonlywhenprevsuspended3.sh \
+	   testsuites/execonlywhenprevsuspended3.conf \
+	   execonlywhenprevsuspended4.sh \
+	   testsuites/execonlywhenprevsuspended4.conf \
+	   tabescape_dflt.sh \
+	   testsuites/tabescape_dflt.conf \
+	   testsuites/1.tabescape_dflt \
+	   tabescape_off.sh \
+	   testsuites/tabescape_off.conf \
+	   testsuites/1.tabescape_off \
+	   dircreate_dflt.sh \
+	   testsuites/dircreate_dflt.conf \
+	   dircreate_off.sh \
+	   testsuites/dircreate_off.conf \
+	   imuxsock_logger_root.sh \
+	   testsuites/imuxsock_logger_root.conf \
+	   resultdata/imuxsock_logger.log \
+	   imuxsock_traillf_root.sh \
+	   testsuites/imuxsock_traillf_root.conf \
+	   resultdata/imuxsock_traillf.log \
+	   imuxsock_ccmiddle_root.sh \
+	   testsuites/imuxsock_ccmiddle_root.conf \
+	   resultdata/imuxsock_ccmiddle.log \
+	   testsuites/mysql-truncate.sql \
+	   testsuites/mysql-select-msg.sql \
+	   libdbi-basic.sh \
+	   testsuites/libdbi-basic.conf \
+	   libdbi-asyn.sh \
+	   testsuites/libdbi-asyn.conf \
+	   mysql-basic.sh \
+	   mysql-basic-vg.sh \
+	   testsuites/mysql-basic.conf \
+	   mysql-asyn.sh \
+	   mysql-asyn-vg.sh \
+	   testsuites/mysql-asyn.conf \
 	   cfg.sh
 
 ourtail_SOURCES = ourtail.c
+msleep_SOURCES = msleep.c
 chkseq_SOURCES = chkseq.c
 
+uxsockrcvr_SOURCES = uxsockrcvr.c
+uxsockrcvr_LDADD = $(SOL_LIBS)
+
 tcpflood_SOURCES = tcpflood.c
-tcpflood_LDADD = $(SOL_LIBS)
+tcpflood_CPPFLAGS =  $(PTHREADS_CFLAGS)
+tcpflood_LDADD = $(SOL_LIBS) $(PTHREADS_LIBS)
+
+syslog_caller_SOURCES = syslog_caller.c
+syslog_caller_LDADD = $(SOL_LIBS)
+
+syslog_inject_SOURCES = syslog_inject.c
+syslog_inject_LDADD = $(SOL_LIBS)
+
+diagtalker_SOURCES = diagtalker.c
+diagtalker_LDADD = $(SOL_LIBS)
 
 randomgen_SOURCES = randomgen.c
 randomgen_LDADD = $(SOL_LIBS)
+
+inputfilegen_SOURCES = inputfilegen.c
+inputfilegen_LDADD = $(SOL_LIBS)
 
 nettester_SOURCES = nettester.c getline.c
 nettester_LDADD = $(SOL_LIBS)

@@ -58,6 +58,7 @@
 #include "errmsg.h"
 
 MODULE_TYPE_OUTPUT
+MODULE_TYPE_NOKEEP
 
 
 /* internal structures
@@ -193,7 +194,7 @@ static rsRetVal TCPSendGSSInit(void *pvData)
 
 	base = (gss_base_service_name == NULL) ? "host" : gss_base_service_name;
 	out_tok.length = strlen(pData->f_hname) + strlen(base) + 2;
-	CHKmalloc(out_tok.value = malloc(out_tok.length));
+	CHKmalloc(out_tok.value = MALLOC(out_tok.length));
 	strcpy(out_tok.value, base);
 	strcat(out_tok.value, "@");
 	strcat(out_tok.value, pData->f_hname);
@@ -361,9 +362,7 @@ static rsRetVal doTryResume(instanceData *pData)
 		}
 		break;
 	case eDestFORW:
-		/* rgerhards, 2007-09-11: this can not happen, but I've included it to
-		 * a) make the compiler happy, b) detect any logic errors */
-		assert(0);
+		/* NOOP */
 		break;
 	}
 
@@ -409,13 +408,13 @@ CODESTARTdoAction
 		 * hard-coded but this may be changed to a config parameter.
 		 * rgerhards, 2006-11-30
 		 */
-		if(pData->compressionLevel && (l > MIN_SIZE_FOR_COMPRESS)) {
+		if(pData->compressionLevel && (l > CONF_MIN_SIZE_FOR_COMPRESS)) {
 			Bytef *out;
 			uLongf destLen = sizeof(out) / sizeof(Bytef);
 			uLong srcLen = l;
 			int ret;
 			/* TODO: optimize malloc sequence? -- rgerhards, 2008-09-02 */
-			CHKmalloc(out = (Bytef*) malloc(iMaxLine + iMaxLine/100 + 12));
+			CHKmalloc(out = (Bytef*) MALLOC(iMaxLine + iMaxLine/100 + 12));
 			out[0] = 'z';
 			out[1] = '\0';
 			ret = compress2((Bytef*) out+1, &destLen, (Bytef*) psz,
@@ -563,7 +562,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 		tmp = ++p;
 		for(i=0 ; *p && isdigit((int) *p) ; ++p, ++i)
 			/* SKIP AND COUNT */;
-		pData->port = malloc(i + 1);
+		pData->port = MALLOC(i + 1);
 		if(pData->port == NULL) {
 			errmsg.LogError(0, NO_ERRCODE, "Could not get memory to store syslog forwarding port, "
 				 "using default port, results may not be what you intend\n");

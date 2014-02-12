@@ -2,8 +2,17 @@ Source: rsyslog
 Section: admin
 Priority: important
 Maintainer: Michael Biebl <biebl@debian.org>
-Build-Depends: debhelper (>= 7.0.50), autotools-dev (>= 20100122.1), zlib1g-dev, libmysqlclient-dev, libpq-dev, libkrb5-dev, libgnutls-dev, librelp-dev, pkg-config
-Standards-Version: 3.9.1
+Build-Depends: debhelper (>= 8),
+               dpkg-dev (>= 1.16.1),
+               autotools-dev (>= 20100122.1),
+               zlib1g-dev,
+               libmysqlclient-dev,
+               libpq-dev,
+               libkrb5-dev,
+               libgnutls-dev,
+               librelp-dev,
+               pkg-config
+Standards-Version: 3.9.3
 Vcs-Git: git://git.debian.org/git/collab-maint/rsyslog.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/rsyslog.git;a=summary
 Homepage: http://www.rsyslog.com/
@@ -11,27 +20,35 @@ Homepage: http://www.rsyslog.com/
 Package: rsyslog
 Architecture: any
 Priority: important
-Conflicts: system-log-daemon, linux-kernel-log-daemon
-Provides: system-log-daemon, linux-kernel-log-daemon
-Depends: ${shlibs:Depends}, ${misc:Depends}, lsb-base (>= 3.2-14)
+Conflicts: system-log-daemon,
+           linux-kernel-log-daemon
+Provides: system-log-daemon,
+          linux-kernel-log-daemon
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         lsb-base (>= 3.2-14),
+         initscripts (>= 2.88dsf-13.3)
 Recommends: logrotate
-Suggests: rsyslog-mysql | rsyslog-pgsql, rsyslog-doc, rsyslog-gnutls, rsyslog-gssapi, rsyslog-relp
-Description: enhanced multi-threaded syslogd
- Rsyslog is an enhanced syslogd supporting, amongst others:
-  * reliable syslog over TCP and SSL/TLS
+Suggests: rsyslog-mysql | rsyslog-pgsql,
+          rsyslog-doc,
+          rsyslog-gnutls,
+          rsyslog-gssapi,
+          rsyslog-relp
+Description: reliable system and kernel logging daemon
+ Rsyslog is a multi-threaded implementation of syslogd (a system utility
+ providing support for message logging), with features that include:
+  * reliable syslog over TCP, SSL/TLS and RELP
   * on-demand disk buffering
   * email alerting
   * writing to MySQL or PostgreSQL databases (via separate output plugins)
   * permitted sender lists
   * filtering on any part of the syslog message
   * on-the-wire message compression
-  * fine grained output format control
-  * backup log destinations
+  * fine-grained output format control
+  * failover to backup destinations
+  * enterprise-class encrypted syslog relaying
  .
- It is quite compatible to stock sysklogd and can be used as a drop-in
- replacement. Its advanced features make it suitable for enterprise-class,
- encryption protected syslog relay chains while at the same time being very
- easy to setup for the novice user.
+ It is the default syslogd on Debian systems.
 
 Package: rsyslog-doc
 Section: doc
@@ -40,18 +57,23 @@ Architecture: all
 Breaks: rsyslog (<< 2.0.1-2)
 Replaces: rsyslog (<< 2.0.1-2)
 Depends: ${misc:Depends}
-Suggests: doc-base, www-browser
+Suggests: doc-base,
+          www-browser
 Description: documentation for rsyslog
- This package contains detailed HTML documentation of rsyslog.
+ This package contains detailed HTML documentation for rsyslog.
  .
- It describes the general configuration file syntax, like filters, actions and
- templates and has detailed information for all available configuration 
+ It describes the general configuration file syntax for filters, actions,
+ templates, etc, and has detailed information for all available configuration
  directives.
 
 Package: rsyslog-mysql
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, rsyslog (= ${binary:Version}), dbconfig-common, ucf
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version}),
+         dbconfig-common,
+         ucf
 Recommends: mysql-client
 Suggests: mysql-server
 Description: MySQL output plugin for rsyslog
@@ -60,17 +82,23 @@ Description: MySQL output plugin for rsyslog
 Package: rsyslog-pgsql
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, rsyslog (= ${binary:Version}), dbconfig-common, ucf
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version}),
+         dbconfig-common,
+         ucf
 Recommends: postgresql-client
 Suggests: postgresql
 Description: PostgreSQL output plugin for rsyslog
- This plugin allows rsyslog to write the syslog messages into a PostgreSQL 
+ This plugin allows rsyslog to write the syslog messages into a PostgreSQL
  database.
 
 Package: rsyslog-gssapi
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, rsyslog (= ${binary:Version})
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version})
 Suggests: krb5-user
 Description: GSSAPI authentication and encryption support for rsyslog
  These plugins allow rsyslog to write and/or receive GSSAPI authenticated and
@@ -80,7 +108,9 @@ Description: GSSAPI authentication and encryption support for rsyslog
 Package: rsyslog-gnutls
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, rsyslog (= ${binary:Version})
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version})
 Suggests: gnutls-bin
 Description: TLS protocol support for rsyslog
  This netstream plugin allows rsyslog to send and receive encrypted syslog
@@ -89,8 +119,10 @@ Description: TLS protocol support for rsyslog
 Package: rsyslog-relp
 Architecture: any
 Priority: extra
-Depends: ${shlibs:Depends}, ${misc:Depends}, rsyslog (= ${binary:Version})
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version})
 Description: RELP protocol support for rsyslog
  These plugins allows rsyslog to send and receive syslog messages via the
- RELP protocol. RELP ensures the reliable transport over the network even on
+ RELP protocol. RELP ensures reliable transport over the network even on
  connection loss or if a peer becomes unavailable.

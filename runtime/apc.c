@@ -40,9 +40,11 @@
 #include "obj.h"
 #include "apc.h"
 #include "srUtils.h"
+#include "datetime.h"
 
 /* static data */
 DEFobjStaticHelpers
+DEFobjCurrIf(datetime)
 
 /* following is a used to implement a monotonically increasing id for the apcs. That
  * ID can be used to cancel an apc request. Note that the ID is generated with modulo
@@ -200,7 +202,7 @@ unlistCurrent(apc_list_t **ppList)
 	DEFiRet;
 	assert(ppList != NULL);
 
-	time(&tCurr);
+	datetime.GetTime(&tCurr);
 
 	if(apcListRoot == NULL || apcListRoot->pApc->ttExec >  tCurr) {
 		*ppList = NULL;
@@ -249,12 +251,11 @@ execScheduled(void)
 	apc_list_t *pExecList;
 	apc_list_t *pCurr;
 	apc_list_t *pNext;
-	DEFVARS_mutexProtection_uncond;
 	DEFiRet;
 
-	BEGIN_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
+	d_pthread_mutex_lock(&listMutex);
 	iRet = unlistCurrent(&pExecList);
-	END_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
+	d_pthread_mutex_unlock(&listMutex);
 	CHKiRet(iRet);
 
 	if(pExecList != NULL) {
@@ -290,14 +291,12 @@ ENDobjConstruct(apc)
 static rsRetVal
 apcConstructFinalize(apc_t *pThis, apc_id_t *pID)
 {
-	DEFVARS_mutexProtection_uncond;
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, apc);
 	assert(pID != NULL);
-	BEGIN_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
+	d_pthread_mutex_lock(&listMutex);
 	insertApc(pThis, pID);
-	END_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
-RUNLOG_STR("apcConstructFinalize post mutex unlock\n");
+	d_pthread_mutex_unlock(&listMutex);
 	RETiRet;
 }
 
@@ -333,12 +332,10 @@ SetParam2(apc_t *pThis, void *param2)
 static rsRetVal
 CancelApc(apc_id_t id)
 {
-	DEFVARS_mutexProtection_uncond;
-
 	BEGINfunc
-	BEGIN_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
+	d_pthread_mutex_lock(&listMutex);
 	deleteApc(id);
-	END_MTX_PROTECTED_OPERATIONS_UNCOND(&listMutex);
+	d_pthread_mutex_unlock(&listMutex);
 	ENDfunc
 	return RS_RET_OK;
 }
@@ -380,7 +377,7 @@ ENDobjQueryInterface(apc)
  * rgerhards, 2009-04-06
  */
 BEGINObjClassExit(apc, OBJ_IS_CORE_MODULE) /* class, version */
-	//objRelease(apcstk, CORE_COMPONENT);
+	objRelease(datetime, CORE_COMPONENT);
 	pthread_mutex_destroy(&listMutex);
 ENDObjClassExit(apc)
 
@@ -391,7 +388,7 @@ ENDObjClassExit(apc)
  */
 BEGINObjClassInit(apc, 1, OBJ_IS_CORE_MODULE) /* class, version */
 	/* request objects we use */
-	//CHKiRet(objUse(apcstk, CORE_COMPONENT));
+	CHKiRet(objUse(datetime, CORE_COMPONENT));
 
 	/* set our own handlers */
 	OBJSetMethodHandler(objMethod_DEBUGPRINT, apcDebugPrint);

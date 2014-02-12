@@ -12,25 +12,23 @@
  *
  * Module begun 2009-06-17 by Rainer Gerhards
  *
- * Copyright 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "config.h"
@@ -53,6 +51,7 @@ DEFobjStaticHelpers
  */
 BEGINobjConstruct(prop) /* be sure to specify the object type also in END macro! */
 	pThis->iRefCount = 1;
+	INIT_ATOMIC_HELPER_MUT(pThis->mutRefCount);
 ENDobjConstruct(prop)
 
 
@@ -60,11 +59,12 @@ ENDobjConstruct(prop)
 BEGINobjDestruct(prop) /* be sure to specify the object type also in END and CODESTART macros! */
 	int currRefCount;
 CODESTARTobjDestruct(prop)
-	currRefCount = ATOMIC_DEC_AND_FETCH(pThis->iRefCount);
+	currRefCount = ATOMIC_DEC_AND_FETCH(&pThis->iRefCount, &pThis->mutRefCount);
 	if(currRefCount == 0) {
 		/* (only) in this case we need to actually destruct the object */
 		if(pThis->len >= CONF_PROP_BUFSIZE)
 			free(pThis->szVal.psz);
+		DESTROY_ATOMIC_HELPER_MUT(pThis->mutRefCount);
 	} else {
 		pThis = NULL; /* tell framework NOT to destructing the object! */
 	}
@@ -83,7 +83,7 @@ static rsRetVal SetString(prop_t *pThis, uchar *psz, int len)
 	if(len < CONF_PROP_BUFSIZE) {
 		memcpy(pThis->szVal.sz, psz, len + 1);
 	} else {
-		CHKmalloc(pThis->szVal.psz = malloc(len + 1));
+		CHKmalloc(pThis->szVal.psz = MALLOC(len + 1));
 		memcpy(pThis->szVal.psz, psz, len + 1);
 	}
 
@@ -132,7 +132,7 @@ propConstructFinalize(prop_t __attribute__((unused)) *pThis)
  */
 static rsRetVal AddRef(prop_t *pThis)
 {
-	ATOMIC_INC(pThis->iRefCount);
+	ATOMIC_INC(&pThis->iRefCount, &pThis->mutRefCount);
 	return RS_RET_OK;
 }
 

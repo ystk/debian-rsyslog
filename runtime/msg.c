@@ -7,7 +7,7 @@
  * of the "old" message code without any modifications. However, it
  * helps to have things at the right place one we go to the meat of it.
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -35,6 +35,8 @@
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #if HAVE_MALLOC_H
 #  include <malloc.h>
 #endif
@@ -51,6 +53,7 @@
 #include "unicode-helper.h"
 #include "ruleset.h"
 #include "prop.h"
+#include "net.h"
 
 /* static data */
 DEFobjStaticHelpers
@@ -59,6 +62,7 @@ DEFobjCurrIf(datetime)
 DEFobjCurrIf(glbl)
 DEFobjCurrIf(regexp)
 DEFobjCurrIf(prop)
+DEFobjCurrIf(net)
 
 static struct {
 	uchar *pszName;
@@ -274,216 +278,13 @@ static char *syslog_severity_names[8] = { "emerg", "alert", "crit", "err", "warn
 static char *syslog_number_names[24] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14",
 					 "15", "16", "17", "18", "19", "20", "21", "22", "23" };
 
+/* global variables */
+#if defined(HAVE_MALLOC_TRIM) && !defined(HAVE_ATOMIC_BUILTINS)
+static pthread_mutex_t mutTrimCtr;	 /* mutex to handle malloc trim */
+#endif
+
 /* some forward declarations */
-static int getAPPNAMELen(msg_t *pM, bool bLockMutex);
-
-
-static inline int getProtocolVersion(msg_t *pM)
-{
-	return(pM->iProtocolVersion);
-}
-
-
-static inline void
-getInputName(msg_t *pM, uchar **ppsz, int *plen)
-{
-	BEGINfunc
-	if(pM == NULL) {
-		*ppsz = UCHAR_CONSTANT("");
-		*plen = 0;
-	} else {
-		prop.GetString(pM->pInputName, ppsz, plen);
-	}
-	ENDfunc
-}
-
-
-static inline uchar*
-getRcvFromIP(msg_t *pM)
-{
-	uchar *psz;
-	int len;
-	BEGINfunc
-	if(pM == NULL) {
-		psz = UCHAR_CONSTANT("");
-	} else {
-		if(pM->pRcvFromIP == NULL)
-			psz = UCHAR_CONSTANT("");
-		else
-			prop.GetString(pM->pRcvFromIP, &psz, &len);
-	}
-	ENDfunc
-	return psz;
-}
-
-
-
-/* map a property name (string) to a property ID */
-rsRetVal propNameToID(cstr_t *pCSPropName, propid_t *pPropID)
-{
-	uchar *pName;
-	DEFiRet;
-
-	assert(pCSPropName != NULL);
-	assert(pPropID != NULL);
-	pName = rsCStrGetSzStrNoNULL(pCSPropName);
-
-	/* sometimes there are aliases to the original MonitoWare
-	 * property names. These come after || in the ifs below. */
-	if(!strcmp((char*) pName, "msg")) {
-		*pPropID = PROP_MSG;
-	} else if(!strcmp((char*) pName, "timestamp")
-		  || !strcmp((char*) pName, "timereported")) {
-		*pPropID = PROP_TIMESTAMP;
-	} else if(!strcmp((char*) pName, "hostname") || !strcmp((char*) pName, "source")) {
-		*pPropID = PROP_HOSTNAME;
-	} else if(!strcmp((char*) pName, "syslogtag")) {
-		*pPropID = PROP_SYSLOGTAG;
-	} else if(!strcmp((char*) pName, "rawmsg")) {
-		*pPropID = PROP_RAWMSG;
-	/* enable this, if someone actually uses UxTradMsg, delete after some  time has
-	 * passed and nobody complained -- rgerhards, 2009-06-16
-	} else if(!strcmp((char*) pName, "uxtradmsg")) {
-		pRes = getUxTradMsg(pMsg);
-	*/
-	} else if(!strcmp((char*) pName, "inputname")) {
-		*pPropID = PROP_INPUTNAME;
-	} else if(!strcmp((char*) pName, "fromhost")) {
-		*pPropID = PROP_FROMHOST;
-	} else if(!strcmp((char*) pName, "fromhost-ip")) {
-		*pPropID = PROP_FROMHOST_IP;
-	} else if(!strcmp((char*) pName, "pri")) {
-		*pPropID = PROP_PRI;
-	} else if(!strcmp((char*) pName, "pri-text")) {
-		*pPropID = PROP_PRI_TEXT;
-	} else if(!strcmp((char*) pName, "iut")) {
-		*pPropID = PROP_IUT;
-	} else if(!strcmp((char*) pName, "syslogfacility")) {
-		*pPropID = PROP_SYSLOGFACILITY;
-	} else if(!strcmp((char*) pName, "syslogfacility-text")) {
-		*pPropID = PROP_SYSLOGFACILITY_TEXT;
-	} else if(!strcmp((char*) pName, "syslogseverity") || !strcmp((char*) pName, "syslogpriority")) {
-		*pPropID = PROP_SYSLOGSEVERITY;
-	} else if(!strcmp((char*) pName, "syslogseverity-text") || !strcmp((char*) pName, "syslogpriority-text")) {
-		*pPropID = PROP_SYSLOGSEVERITY_TEXT;
-	} else if(!strcmp((char*) pName, "timegenerated")) {
-		*pPropID = PROP_TIMEGENERATED;
-	} else if(!strcmp((char*) pName, "programname")) {
-		*pPropID = PROP_PROGRAMNAME;
-	} else if(!strcmp((char*) pName, "protocol-version")) {
-		*pPropID = PROP_PROTOCOL_VERSION;
-	} else if(!strcmp((char*) pName, "structured-data")) {
-		*pPropID = PROP_STRUCTURED_DATA;
-	} else if(!strcmp((char*) pName, "app-name")) {
-		*pPropID = PROP_APP_NAME;
-	} else if(!strcmp((char*) pName, "procid")) {
-		*pPropID = PROP_PROCID;
-	} else if(!strcmp((char*) pName, "msgid")) {
-		*pPropID = PROP_MSGID;
-	/* here start system properties (those, that do not relate to the message itself */
-	} else if(!strcmp((char*) pName, "$now")) {
-		*pPropID = PROP_SYS_NOW;
-	} else if(!strcmp((char*) pName, "$year")) {
-		*pPropID = PROP_SYS_YEAR;
-	} else if(!strcmp((char*) pName, "$month")) {
-		*pPropID = PROP_SYS_MONTH;
-	} else if(!strcmp((char*) pName, "$day")) {
-		*pPropID = PROP_SYS_DAY;
-	} else if(!strcmp((char*) pName, "$hour")) {
-		*pPropID = PROP_SYS_HOUR;
-	} else if(!strcmp((char*) pName, "$hhour")) {
-		*pPropID = PROP_SYS_HHOUR;
-	} else if(!strcmp((char*) pName, "$qhour")) {
-		*pPropID = PROP_SYS_QHOUR;
-	} else if(!strcmp((char*) pName, "$minute")) {
-		*pPropID = PROP_SYS_MINUTE;
-	} else if(!strcmp((char*) pName, "$myhostname")) {
-		*pPropID = PROP_SYS_MYHOSTNAME;
-	} else {
-		*pPropID = PROP_INVALID;
-		iRet = RS_RET_VAR_NOT_FOUND;
-	}
-
-	RETiRet;
-}
-
-
-/* map a property ID to a name string (useful for displaying) */
-uchar *propIDToName(propid_t propID)
-{
-	switch(propID) {
-		case PROP_MSG:
-			return UCHAR_CONSTANT("msg");
-		case PROP_TIMESTAMP:
-			return UCHAR_CONSTANT("timestamp");
-		case PROP_HOSTNAME:
-			return UCHAR_CONSTANT("hostname");
-		case PROP_SYSLOGTAG:
-			return UCHAR_CONSTANT("syslogtag");
-		case PROP_RAWMSG:
-			return UCHAR_CONSTANT("rawmsg");
-		/* enable this, if someone actually uses UxTradMsg, delete after some  time has
-		 * passed and nobody complained -- rgerhards, 2009-06-16
-		case PROP_UXTRADMSG:
-			pRes = getUxTradMsg(pMsg);
-			break;
-		*/
-		case PROP_INPUTNAME:
-			return UCHAR_CONSTANT("inputname");
-		case PROP_FROMHOST:
-			return UCHAR_CONSTANT("fromhost");
-		case PROP_FROMHOST_IP:
-			return UCHAR_CONSTANT("fromhost-ip");
-		case PROP_PRI:
-			return UCHAR_CONSTANT("pri");
-		case PROP_PRI_TEXT:
-			return UCHAR_CONSTANT("pri-text");
-		case PROP_IUT:
-			return UCHAR_CONSTANT("iut");
-		case PROP_SYSLOGFACILITY:
-			return UCHAR_CONSTANT("syslogfacility");
-		case PROP_SYSLOGFACILITY_TEXT:
-			return UCHAR_CONSTANT("syslogfacility-text");
-		case PROP_SYSLOGSEVERITY:
-			return UCHAR_CONSTANT("syslogseverity");
-		case PROP_SYSLOGSEVERITY_TEXT:
-			return UCHAR_CONSTANT("syslogseverity-text");
-		case PROP_TIMEGENERATED:
-			return UCHAR_CONSTANT("timegenerated");
-		case PROP_PROGRAMNAME:
-			return UCHAR_CONSTANT("programname");
-		case PROP_PROTOCOL_VERSION:
-			return UCHAR_CONSTANT("protocol-version");
-		case PROP_STRUCTURED_DATA:
-			return UCHAR_CONSTANT("structured-data");
-		case PROP_APP_NAME:
-			return UCHAR_CONSTANT("app-name");
-		case PROP_PROCID:
-			return UCHAR_CONSTANT("procid");
-		case PROP_MSGID:
-			return UCHAR_CONSTANT("msgid");
-		case PROP_SYS_NOW:
-			return UCHAR_CONSTANT("$NOW");
-		case PROP_SYS_YEAR:
-			return UCHAR_CONSTANT("$YEAR");
-		case PROP_SYS_MONTH:
-			return UCHAR_CONSTANT("$MONTH");
-		case PROP_SYS_DAY:
-			return UCHAR_CONSTANT("$DAY");
-		case PROP_SYS_HOUR:
-			return UCHAR_CONSTANT("$HOUR");
-		case PROP_SYS_HHOUR:
-			return UCHAR_CONSTANT("$HHOUR");
-		case PROP_SYS_QHOUR:
-			return UCHAR_CONSTANT("$QHOUR");
-		case PROP_SYS_MINUTE:
-			return UCHAR_CONSTANT("$MINUTE");
-		case PROP_SYS_MYHOSTNAME:
-			return UCHAR_CONSTANT("$MYHOSTNAME");
-		default:
-			return UCHAR_CONSTANT("*invalid property id*");
-	}
-}
+static int getAPPNAMELen(msg_t *pM, sbool bLockMutex);
 
 
 /* The following functions will support advanced output module
@@ -601,6 +402,256 @@ rsRetVal MsgEnableThreadSafety(void)
 /* end locking functions */
 
 
+static inline int getProtocolVersion(msg_t *pM)
+{
+	return(pM->iProtocolVersion);
+}
+
+
+/* do a DNS reverse resolution, if not already done, reflect status
+ * rgerhards, 2009-11-16
+ */
+static inline rsRetVal
+resolveDNS(msg_t *pMsg) {
+	rsRetVal localRet;
+	prop_t *propFromHost = NULL;
+	prop_t *propFromHostIP = NULL;
+	uchar fromHost[NI_MAXHOST];
+	uchar fromHostIP[NI_MAXHOST];
+	uchar fromHostFQDN[NI_MAXHOST];
+	DEFiRet;
+
+	MsgLock(pMsg);
+	CHKiRet(objUse(net, CORE_COMPONENT));
+	if(pMsg->msgFlags & NEEDS_DNSRESOL) {
+		localRet = net.cvthname(pMsg->rcvFrom.pfrominet, fromHost, fromHostFQDN, fromHostIP);
+		if(localRet == RS_RET_OK) {
+			MsgSetRcvFromStr(pMsg, fromHost, ustrlen(fromHost), &propFromHost);
+			CHKiRet(MsgSetRcvFromIPStr(pMsg, fromHostIP, ustrlen(fromHostIP), &propFromHostIP));
+		}
+	}
+finalize_it:
+	MsgUnlock(pMsg);
+	if(iRet != RS_RET_OK) {
+		/* best we can do: remove property */
+		MsgSetRcvFromStr(pMsg, UCHAR_CONSTANT(""), 0, &propFromHost);
+		prop.Destruct(&propFromHost);
+	}
+	if(propFromHost != NULL)
+		prop.Destruct(&propFromHost);
+	if(propFromHostIP != NULL)
+		prop.Destruct(&propFromHostIP);
+	RETiRet;
+}
+
+
+static inline void
+getInputName(msg_t *pM, uchar **ppsz, int *plen)
+{
+	BEGINfunc
+	if(pM == NULL || pM->pInputName == NULL) {
+		*ppsz = UCHAR_CONSTANT("");
+		*plen = 0;
+	} else {
+		prop.GetString(pM->pInputName, ppsz, plen);
+	}
+	ENDfunc
+}
+
+
+static inline uchar*
+getRcvFromIP(msg_t *pM)
+{
+	uchar *psz;
+	int len;
+	BEGINfunc
+	if(pM == NULL) {
+		psz = UCHAR_CONSTANT("");
+	} else {
+		resolveDNS(pM); /* make sure we have a resolved entry */
+		if(pM->pRcvFromIP == NULL)
+			psz = UCHAR_CONSTANT("");
+		else
+			prop.GetString(pM->pRcvFromIP, &psz, &len);
+	}
+	ENDfunc
+	return psz;
+}
+
+
+
+/* map a property name (string) to a property ID */
+rsRetVal propNameToID(cstr_t *pCSPropName, propid_t *pPropID)
+{
+	uchar *pName;
+	DEFiRet;
+
+	assert(pCSPropName != NULL);
+	assert(pPropID != NULL);
+	pName = rsCStrGetSzStrNoNULL(pCSPropName);
+
+	/* sometimes there are aliases to the original MonitoWare
+	 * property names. These come after || in the ifs below. */
+	if(!strcmp((char*) pName, "msg")) {
+		*pPropID = PROP_MSG;
+	} else if(!strcmp((char*) pName, "timestamp")
+		  || !strcmp((char*) pName, "timereported")) {
+		*pPropID = PROP_TIMESTAMP;
+	} else if(!strcmp((char*) pName, "hostname") || !strcmp((char*) pName, "source")) {
+		*pPropID = PROP_HOSTNAME;
+	} else if(!strcmp((char*) pName, "syslogtag")) {
+		*pPropID = PROP_SYSLOGTAG;
+	} else if(!strcmp((char*) pName, "rawmsg")) {
+		*pPropID = PROP_RAWMSG;
+	/* enable this, if someone actually uses UxTradMsg, delete after some  time has
+	 * passed and nobody complained -- rgerhards, 2009-06-16
+	} else if(!strcmp((char*) pName, "uxtradmsg")) {
+		pRes = getUxTradMsg(pMsg);
+	*/
+	} else if(!strcmp((char*) pName, "inputname")) {
+		*pPropID = PROP_INPUTNAME;
+	} else if(!strcmp((char*) pName, "fromhost")) {
+		*pPropID = PROP_FROMHOST;
+	} else if(!strcmp((char*) pName, "fromhost-ip")) {
+		*pPropID = PROP_FROMHOST_IP;
+	} else if(!strcmp((char*) pName, "pri")) {
+		*pPropID = PROP_PRI;
+	} else if(!strcmp((char*) pName, "pri-text")) {
+		*pPropID = PROP_PRI_TEXT;
+	} else if(!strcmp((char*) pName, "iut")) {
+		*pPropID = PROP_IUT;
+	} else if(!strcmp((char*) pName, "syslogfacility")) {
+		*pPropID = PROP_SYSLOGFACILITY;
+	} else if(!strcmp((char*) pName, "syslogfacility-text")) {
+		*pPropID = PROP_SYSLOGFACILITY_TEXT;
+	} else if(!strcmp((char*) pName, "syslogseverity") || !strcmp((char*) pName, "syslogpriority")) {
+		*pPropID = PROP_SYSLOGSEVERITY;
+	} else if(!strcmp((char*) pName, "syslogseverity-text") || !strcmp((char*) pName, "syslogpriority-text")) {
+		*pPropID = PROP_SYSLOGSEVERITY_TEXT;
+	} else if(!strcmp((char*) pName, "timegenerated")) {
+		*pPropID = PROP_TIMEGENERATED;
+	} else if(!strcmp((char*) pName, "programname")) {
+		*pPropID = PROP_PROGRAMNAME;
+	} else if(!strcmp((char*) pName, "protocol-version")) {
+		*pPropID = PROP_PROTOCOL_VERSION;
+	} else if(!strcmp((char*) pName, "structured-data")) {
+		*pPropID = PROP_STRUCTURED_DATA;
+	} else if(!strcmp((char*) pName, "app-name")) {
+		*pPropID = PROP_APP_NAME;
+	} else if(!strcmp((char*) pName, "procid")) {
+		*pPropID = PROP_PROCID;
+	} else if(!strcmp((char*) pName, "msgid")) {
+		*pPropID = PROP_MSGID;
+	/* here start system properties (those, that do not relate to the message itself */
+	} else if(!strcmp((char*) pName, "$now")) {
+		*pPropID = PROP_SYS_NOW;
+	} else if(!strcmp((char*) pName, "$year")) {
+		*pPropID = PROP_SYS_YEAR;
+	} else if(!strcmp((char*) pName, "$month")) {
+		*pPropID = PROP_SYS_MONTH;
+	} else if(!strcmp((char*) pName, "$day")) {
+		*pPropID = PROP_SYS_DAY;
+	} else if(!strcmp((char*) pName, "$hour")) {
+		*pPropID = PROP_SYS_HOUR;
+	} else if(!strcmp((char*) pName, "$hhour")) {
+		*pPropID = PROP_SYS_HHOUR;
+	} else if(!strcmp((char*) pName, "$qhour")) {
+		*pPropID = PROP_SYS_QHOUR;
+	} else if(!strcmp((char*) pName, "$minute")) {
+		*pPropID = PROP_SYS_MINUTE;
+	} else if(!strcmp((char*) pName, "$myhostname")) {
+		*pPropID = PROP_SYS_MYHOSTNAME;
+	} else if(!strcmp((char*) pName, "$bom")) {
+		*pPropID = PROP_SYS_BOM;
+	} else {
+		*pPropID = PROP_INVALID;
+		iRet = RS_RET_VAR_NOT_FOUND;
+	}
+
+	RETiRet;
+}
+
+
+/* map a property ID to a name string (useful for displaying) */
+uchar *propIDToName(propid_t propID)
+{
+	switch(propID) {
+		case PROP_MSG:
+			return UCHAR_CONSTANT("msg");
+		case PROP_TIMESTAMP:
+			return UCHAR_CONSTANT("timestamp");
+		case PROP_HOSTNAME:
+			return UCHAR_CONSTANT("hostname");
+		case PROP_SYSLOGTAG:
+			return UCHAR_CONSTANT("syslogtag");
+		case PROP_RAWMSG:
+			return UCHAR_CONSTANT("rawmsg");
+		/* enable this, if someone actually uses UxTradMsg, delete after some  time has
+		 * passed and nobody complained -- rgerhards, 2009-06-16
+		case PROP_UXTRADMSG:
+			pRes = getUxTradMsg(pMsg);
+			break;
+		*/
+		case PROP_INPUTNAME:
+			return UCHAR_CONSTANT("inputname");
+		case PROP_FROMHOST:
+			return UCHAR_CONSTANT("fromhost");
+		case PROP_FROMHOST_IP:
+			return UCHAR_CONSTANT("fromhost-ip");
+		case PROP_PRI:
+			return UCHAR_CONSTANT("pri");
+		case PROP_PRI_TEXT:
+			return UCHAR_CONSTANT("pri-text");
+		case PROP_IUT:
+			return UCHAR_CONSTANT("iut");
+		case PROP_SYSLOGFACILITY:
+			return UCHAR_CONSTANT("syslogfacility");
+		case PROP_SYSLOGFACILITY_TEXT:
+			return UCHAR_CONSTANT("syslogfacility-text");
+		case PROP_SYSLOGSEVERITY:
+			return UCHAR_CONSTANT("syslogseverity");
+		case PROP_SYSLOGSEVERITY_TEXT:
+			return UCHAR_CONSTANT("syslogseverity-text");
+		case PROP_TIMEGENERATED:
+			return UCHAR_CONSTANT("timegenerated");
+		case PROP_PROGRAMNAME:
+			return UCHAR_CONSTANT("programname");
+		case PROP_PROTOCOL_VERSION:
+			return UCHAR_CONSTANT("protocol-version");
+		case PROP_STRUCTURED_DATA:
+			return UCHAR_CONSTANT("structured-data");
+		case PROP_APP_NAME:
+			return UCHAR_CONSTANT("app-name");
+		case PROP_PROCID:
+			return UCHAR_CONSTANT("procid");
+		case PROP_MSGID:
+			return UCHAR_CONSTANT("msgid");
+		case PROP_SYS_NOW:
+			return UCHAR_CONSTANT("$NOW");
+		case PROP_SYS_YEAR:
+			return UCHAR_CONSTANT("$YEAR");
+		case PROP_SYS_MONTH:
+			return UCHAR_CONSTANT("$MONTH");
+		case PROP_SYS_DAY:
+			return UCHAR_CONSTANT("$DAY");
+		case PROP_SYS_HOUR:
+			return UCHAR_CONSTANT("$HOUR");
+		case PROP_SYS_HHOUR:
+			return UCHAR_CONSTANT("$HHOUR");
+		case PROP_SYS_QHOUR:
+			return UCHAR_CONSTANT("$QHOUR");
+		case PROP_SYS_MINUTE:
+			return UCHAR_CONSTANT("$MINUTE");
+		case PROP_SYS_MYHOSTNAME:
+			return UCHAR_CONSTANT("$MYHOSTNAME");
+		case PROP_SYS_BOM:
+			return UCHAR_CONSTANT("$BOM");
+		default:
+			return UCHAR_CONSTANT("*invalid property id*");
+	}
+}
+
+
 /* This is common code for all Constructors. It is defined in an
  * inline'able function so that we can save a function call in the
  * actual constructors (otherwise, the msgConstruct would need
@@ -626,13 +677,13 @@ static inline rsRetVal msgBaseConstruct(msg_t **ppThis)
 	msg_t *pM;
 
 	assert(ppThis != NULL);
-	CHKmalloc(pM = malloc(sizeof(msg_t)));
+	CHKmalloc(pM = MALLOC(sizeof(msg_t)));
 	objConstructSetObjInfo(pM); /* intialize object helper entities */
 
 	/* initialize members in ORDER they appear in structure (think "cache line"!) */
 	pM->flowCtlType = 0;
 	pM->bDoLock = 0;
-	pM->bParseHOSTNAME = 0;
+	pM->bAlreadyFreed = 0;
 	pM->iRefCount = 1;
 	pM->iSeverity = -1;
 	pM->iFacility = -1;
@@ -661,7 +712,7 @@ static inline rsRetVal msgBaseConstruct(msg_t **ppThis)
 	pM->pCSMSGID = NULL;
 	pM->pInputName = NULL;
 	pM->pRcvFromIP = NULL;
-	pM->pRcvFrom = NULL;
+	pM->rcvFrom.pRcvFrom = NULL;
 	pM->pRuleset = NULL;
 	memset(&pM->tRcvdAt, 0, sizeof(pM->tRcvdAt));
 	memset(&pM->tTIMESTAMP, 0, sizeof(pM->tTIMESTAMP));
@@ -745,10 +796,13 @@ static inline void freeHOSTNAME(msg_t *pThis)
 
 BEGINobjDestruct(msg) /* be sure to specify the object type also in END and CODESTART macros! */
 	int currRefCount;
+#	if HAVE_MALLOC_TRIM
+	int currCnt;
+#	endif
 CODESTARTobjDestruct(msg)
 	/* DEV Debugging only ! dbgprintf("msgDestruct\t0x%lx, Ref now: %d\n", (unsigned long)pThis, pThis->iRefCount - 1); */
 #	ifdef HAVE_ATOMIC_BUILTINS
-		currRefCount = ATOMIC_DEC_AND_FETCH(pThis->iRefCount);
+		currRefCount = ATOMIC_DEC_AND_FETCH(&pThis->iRefCount, NULL);
 #	else
 		MsgLock(pThis);
 		currRefCount = --pThis->iRefCount;
@@ -756,14 +810,27 @@ CODESTARTobjDestruct(msg)
 	if(currRefCount == 0)
 	{
 		/* DEV Debugging Only! dbgprintf("msgDestruct\t0x%lx, RefCount now 0, doing DESTROY\n", (unsigned long)pThis); */
+		/* The if below is included to try to nail down a well-hidden bug causing
+		 * segfaults. I hope that do to the test code the problem is sooner detected and
+		 * thus we get better data for debugging and resolving it. -- rgerhards, 2011-02-23.
+		 * TODO: remove when no longer needed.
+		 */
+		if(pThis->bAlreadyFreed)
+			abort();
+		pThis->bAlreadyFreed = 1;
+		/* end debug code */
 		if(pThis->pszRawMsg != pThis->szRawMsg)
 			free(pThis->pszRawMsg);
 		freeTAG(pThis);
 		freeHOSTNAME(pThis);
 		if(pThis->pInputName != NULL)
 			prop.Destruct(&pThis->pInputName);
-		if(pThis->pRcvFrom != NULL)
-			prop.Destruct(&pThis->pRcvFrom);
+		if((pThis->msgFlags & NEEDS_DNSRESOL) == 0) {
+			if(pThis->rcvFrom.pRcvFrom != NULL)
+				prop.Destruct(&pThis->rcvFrom.pRcvFrom);
+		} else {
+			free(pThis->rcvFrom.pfrominet);
+		}
 		if(pThis->pRcvFromIP != NULL)
 			prop.Destruct(&pThis->pRcvFromIP);
 		free(pThis->pszRcvdAt3164);
@@ -800,7 +867,8 @@ CODESTARTobjDestruct(msg)
 			 * that we trim too often when the counter wraps.
 			 */
 			static unsigned iTrimCtr = 1;
-			if(ATOMIC_INC_AND_FETCH(iTrimCtr) % 100000 == 0) {
+			currCnt = ATOMIC_INC_AND_FETCH_unsigned(&iTrimCtr, &mutTrimCtr);
+			if(currCnt % 100000 == 0) {
 				malloc_trim(128*1024);
 			}
 		}
@@ -849,6 +917,7 @@ ENDobjDestruct(msg)
 msg_t* MsgDup(msg_t* pOld)
 {
 	msg_t* pNew;
+	rsRetVal localRet;
 
 	assert(pOld != NULL);
 
@@ -861,7 +930,6 @@ msg_t* MsgDup(msg_t* pOld)
 	pNew->iRefCount = 1;
 	pNew->iSeverity = pOld->iSeverity;
 	pNew->iFacility = pOld->iFacility;
-	pNew->bParseHOSTNAME = pOld->bParseHOSTNAME;
 	pNew->msgFlags = pOld->msgFlags;
 	pNew->iProtocolVersion = pOld->iProtocolVersion;
 	pNew->ttGenTime = pOld->ttGenTime;
@@ -870,9 +938,20 @@ msg_t* MsgDup(msg_t* pOld)
 	pNew->iLenMSG = pOld->iLenMSG;
 	pNew->iLenTAG = pOld->iLenTAG;
 	pNew->iLenHOSTNAME = pOld->iLenHOSTNAME;
-	if(pOld->pRcvFrom != NULL) {
-		pNew->pRcvFrom = pOld->pRcvFrom;
-		prop.AddRef(pNew->pRcvFrom);
+	if((pOld->msgFlags & NEEDS_DNSRESOL)) {
+			localRet = msgSetFromSockinfo(pNew, pOld->rcvFrom.pfrominet);
+			if(localRet != RS_RET_OK) {
+				/* if something fails, we accept loss of this property, it is
+				 * better than losing the whole message.
+				 */
+				pNew->msgFlags &= ~NEEDS_DNSRESOL;
+				pNew->rcvFrom.pRcvFrom = NULL; /* make sure no dangling values */
+			}
+	} else {
+		if(pOld->rcvFrom.pRcvFrom != NULL) {
+			pNew->rcvFrom.pRcvFrom = pOld->rcvFrom.pRcvFrom;
+			prop.AddRef(pNew->rcvFrom.pRcvFrom);
+		}
 	}
 	if(pOld->pRcvFromIP != NULL) {
 		pNew->pRcvFromIP = pOld->pRcvFromIP;
@@ -888,7 +967,7 @@ msg_t* MsgDup(msg_t* pOld)
 	*/
 	if(pOld->iLenTAG > 0) {
 		if(pOld->iLenTAG < CONF_TAG_BUFSIZE) {
-			memcpy(pNew->TAG.szBuf, pOld->TAG.szBuf, pOld->iLenTAG);
+			memcpy(pNew->TAG.szBuf, pOld->TAG.szBuf, pOld->iLenTAG + 1);
 		} else {
 			if((pNew->TAG.pszTAG = srUtilStrDup(pOld->TAG.pszTAG, pOld->iLenTAG)) == NULL) {
 				msgDestruct(&pNew);
@@ -935,7 +1014,7 @@ msg_t* MsgDup(msg_t* pOld)
  * We do not serialize the cache properties. We re-create them when needed.
  * This saves us a lot of memory. Performance is no concern, as serializing
  * is a so slow operation that recration of the caches does not count. Also,
- * we do not serialize bParseHOSTNAME, as this is only a helper variable
+ * we do not serialize --currently none--, as this is only a helper variable
  * during msg construction - and never again used later.
  * rgerhards, 2008-01-03
  */
@@ -978,6 +1057,12 @@ static rsRetVal MsgSerialize(msg_t *pThis, strm_t *pStrm)
 	objSerializePTR(pStrm, pCSAPPNAME, CSTR);
 	objSerializePTR(pStrm, pCSPROCID, CSTR);
 	objSerializePTR(pStrm, pCSMSGID, CSTR);
+	
+	if(pThis->pRuleset != NULL) {
+		rulesetGetName(pThis->pRuleset);
+		CHKiRet(obj.SerializeProp(pStrm, UCHAR_CONSTANT("pszRuleset"), PROPTYPE_PSZ,
+			rulesetGetName(pThis->pRuleset)));
+	}
 
 	/* offset must be serialized after pszRawMsg, because we need that to obtain the correct
 	 * MSG size.
@@ -1002,7 +1087,7 @@ msg_t *MsgAddRef(msg_t *pM)
 {
 	assert(pM != NULL);
 #	ifdef HAVE_ATOMIC_BUILTINS
-		ATOMIC_INC(pM->iRefCount);
+		ATOMIC_INC(&pM->iRefCount, NULL);
 #	else
 		MsgLock(pM);
 		pM->iRefCount++;
@@ -1136,15 +1221,21 @@ char *getProtocolVersionString(msg_t *pM)
 }
 
 
-static char *getRawMsg(msg_t *pM)
+static inline void
+getRawMsg(msg_t *pM, uchar **pBuf, int *piLen)
 {
-	if(pM == NULL)
-		return "";
-	else
-		if(pM->pszRawMsg == NULL)
-			return "";
-		else
-			return (char*)pM->pszRawMsg;
+	if(pM == NULL) {
+		*pBuf=  UCHAR_CONSTANT("");
+		*piLen = 0;
+	} else {
+		if(pM->pszRawMsg == NULL) {
+			*pBuf=  UCHAR_CONSTANT("");
+			*piLen = 0;
+		} else {
+			*pBuf = pM->pszRawMsg;
+			*piLen = pM->iLenRawMsg;
+		}
+	}
 }
 
 
@@ -1189,7 +1280,8 @@ static int getPRIi(msg_t *pM)
 
 /* Get PRI value in text form
  */
-static inline char *getPRI(msg_t *pM)
+char *
+getPRI(msg_t *pM)
 {
 	/* PRI is a number in the range 0..191. Thus, we use a simple lookup table to obtain the
 	 * string value. It looks a bit clumpsy here in code ;)
@@ -1204,7 +1296,8 @@ static inline char *getPRI(msg_t *pM)
 }
 
 
-static inline char *getTimeReported(msg_t *pM, enum tplFormatTypes eFmt)
+char *
+getTimeReported(msg_t *pM, enum tplFormatTypes eFmt)
 {
 	BEGINfunc
 	if(pM == NULL)
@@ -1225,7 +1318,7 @@ static inline char *getTimeReported(msg_t *pM, enum tplFormatTypes eFmt)
 	case tplFmtMySQLDate:
 		MsgLock(pM);
 		if(pM->pszTIMESTAMP_MySQL == NULL) {
-			if((pM->pszTIMESTAMP_MySQL = malloc(15)) == NULL) {
+			if((pM->pszTIMESTAMP_MySQL = MALLOC(15)) == NULL) {
 				MsgUnlock(pM);
 				return "";
 			}
@@ -1236,7 +1329,7 @@ static inline char *getTimeReported(msg_t *pM, enum tplFormatTypes eFmt)
         case tplFmtPgSQLDate:
                 MsgLock(pM);
                 if(pM->pszTIMESTAMP_PgSQL == NULL) {
-                        if((pM->pszTIMESTAMP_PgSQL = malloc(21)) == NULL) {
+                        if((pM->pszTIMESTAMP_PgSQL = MALLOC(21)) == NULL) {
                                 MsgUnlock(pM);
                                 return "";
                         }
@@ -1277,7 +1370,7 @@ static inline char *getTimeGenerated(msg_t *pM, enum tplFormatTypes eFmt)
 	case tplFmtDefault:
 		MsgLock(pM);
 		if(pM->pszRcvdAt3164 == NULL) {
-			if((pM->pszRcvdAt3164 = malloc(16)) == NULL) {
+			if((pM->pszRcvdAt3164 = MALLOC(16)) == NULL) {
 				MsgUnlock(pM);
 				return "";
 			}
@@ -1288,7 +1381,7 @@ static inline char *getTimeGenerated(msg_t *pM, enum tplFormatTypes eFmt)
 	case tplFmtMySQLDate:
 		MsgLock(pM);
 		if(pM->pszRcvdAt_MySQL == NULL) {
-			if((pM->pszRcvdAt_MySQL = malloc(15)) == NULL) {
+			if((pM->pszRcvdAt_MySQL = MALLOC(15)) == NULL) {
 				MsgUnlock(pM);
 				return "";
 			}
@@ -1299,7 +1392,7 @@ static inline char *getTimeGenerated(msg_t *pM, enum tplFormatTypes eFmt)
         case tplFmtPgSQLDate:
                 MsgLock(pM);
                 if(pM->pszRcvdAt_PgSQL == NULL) {
-                        if((pM->pszRcvdAt_PgSQL = malloc(21)) == NULL) {
+                        if((pM->pszRcvdAt_PgSQL = MALLOC(21)) == NULL) {
                                 MsgUnlock(pM);
                                 return "";
                         }
@@ -1311,7 +1404,7 @@ static inline char *getTimeGenerated(msg_t *pM, enum tplFormatTypes eFmt)
 	case tplFmtRFC3164BuggyDate:
 		MsgLock(pM);
 		if(pM->pszRcvdAt3164 == NULL) {
-			if((pM->pszRcvdAt3164 = malloc(16)) == NULL) {
+			if((pM->pszRcvdAt3164 = MALLOC(16)) == NULL) {
 					MsgUnlock(pM);
 					return "";
 				}
@@ -1323,7 +1416,7 @@ static inline char *getTimeGenerated(msg_t *pM, enum tplFormatTypes eFmt)
 	case tplFmtRFC3339Date:
 		MsgLock(pM);
 		if(pM->pszRcvdAt3339 == NULL) {
-			if((pM->pszRcvdAt3339 = malloc(33)) == NULL) {
+			if((pM->pszRcvdAt3339 = MALLOC(33)) == NULL) {
 				MsgUnlock(pM);
 				return "";
 			}
@@ -1476,7 +1569,7 @@ rsRetVal MsgSetPROCID(msg_t *pMsg, char* pszPROCID)
 		CHKiRet(cstrConstruct(&pMsg->pCSPROCID));
 	}
 	/* if we reach this point, we have the object */
-	iRet = rsCStrSetSzStr(pMsg->pCSPROCID, (uchar*) pszPROCID);
+	CHKiRet(rsCStrSetSzStr(pMsg->pCSPROCID, (uchar*) pszPROCID));
 	CHKiRet(cstrFinalize(pMsg->pCSPROCID));
 
 finalize_it:
@@ -1488,7 +1581,7 @@ finalize_it:
  * This must be called WITHOUT the message lock being held.
  * rgerhards, 2009-06-26
  */
-static inline void preparePROCID(msg_t *pM, bool bLockMutex)
+static inline void preparePROCID(msg_t *pM, sbool bLockMutex)
 {
 	if(pM->pCSPROCID == NULL) {
 		if(bLockMutex == LOCK_MUTEX)
@@ -1505,7 +1598,7 @@ static inline void preparePROCID(msg_t *pM, bool bLockMutex)
 #if 0
 /* rgerhards, 2005-11-24
  */
-static inline int getPROCIDLen(msg_t *pM, bool bLockMutex)
+static inline int getPROCIDLen(msg_t *pM, sbool bLockMutex)
 {
 	assert(pM != NULL);
 	preparePROCID(pM, bLockMutex);
@@ -1516,11 +1609,21 @@ static inline int getPROCIDLen(msg_t *pM, bool bLockMutex)
 
 /* rgerhards, 2005-11-24
  */
-char *getPROCID(msg_t *pM, bool bLockMutex)
+char *getPROCID(msg_t *pM, sbool bLockMutex)
 {
+	uchar *pszRet;
+
 	ISOBJ_TYPE_assert(pM, msg);
-	preparePROCID(pM, bLockMutex);
-	return (pM->pCSPROCID == NULL) ? "-" : (char*) cstrGetSzStrNoNULL(pM->pCSPROCID);
+	if(bLockMutex == LOCK_MUTEX)
+		MsgLock(pM);
+	preparePROCID(pM, MUTEX_ALREADY_LOCKED);
+	if(pM->pCSPROCID == NULL)
+		pszRet = UCHAR_CONSTANT("");
+	else 
+		pszRet = rsCStrGetSzStrNoNULL(pM->pCSPROCID);
+	if(bLockMutex == LOCK_MUTEX)
+		MsgUnlock(pM);
+	return (char*) pszRet;
 }
 
 
@@ -1542,13 +1645,20 @@ finalize_it:
 }
 
 
-/* rgerhards, 2005-11-24
+/* al, 2011-07-26: LockMsg to avoid race conditions
  */
 static inline char *getMSGID(msg_t *pM)
 {
-	return (pM->pCSMSGID == NULL) ? "-" : (char*) rsCStrGetSzStrNoNULL(pM->pCSMSGID);
+	if (pM->pCSMSGID == NULL) {
+		return "-"; 
+	}
+	else {
+		MsgLock(pM);
+		char* pszreturn = (char*) rsCStrGetSzStrNoNULL(pM->pCSMSGID);
+		MsgUnlock(pM);
+		return pszreturn; 
+	}
 }
-
 
 /* rgerhards 2009-06-12: set associated ruleset
  */
@@ -1556,6 +1666,16 @@ void MsgSetRuleset(msg_t *pMsg, ruleset_t *pRuleset)
 {
 	assert(pMsg != NULL);
 	pMsg->pRuleset = pRuleset;
+}
+
+
+/* rgerhards 2012-04-18: set associated ruleset (by ruleset name)
+ * If ruleset cannot be found, no update is done.
+ */
+static void
+MsgSetRulesetByName(msg_t *pMsg, cstr_t *rulesetName)
+{
+	rulesetGetRuleset(&(pMsg->pRuleset), rsCStrGetSzStrNoNULL(rulesetName));
 }
 
 
@@ -1574,7 +1694,7 @@ void MsgSetTAG(msg_t *pMsg, uchar* pszBuf, size_t lenBuf)
 		/* small enough: use fixed buffer (faster!) */
 		pBuf = pMsg->TAG.szBuf;
 	} else {
-		if((pBuf = (uchar*) malloc(pMsg->iLenTAG + 1)) == NULL) {
+		if((pBuf = (uchar*) MALLOC(pMsg->iLenTAG + 1)) == NULL) {
 			/* truncate message, better than completely loosing it... */
 			pBuf = pMsg->TAG.szBuf;
 			pMsg->iLenTAG = CONF_TAG_BUFSIZE - 1;
@@ -1585,6 +1705,7 @@ void MsgSetTAG(msg_t *pMsg, uchar* pszBuf, size_t lenBuf)
 
 	memcpy(pBuf, pszBuf, pMsg->iLenTAG);
 	pBuf[pMsg->iLenTAG] = '\0'; /* this also works with truncation! */
+
 }
 
 
@@ -1595,7 +1716,7 @@ void MsgSetTAG(msg_t *pMsg, uchar* pszBuf, size_t lenBuf)
  * if there is a TAG and, if not, if it can emulate it.
  * rgerhards, 2005-11-24
  */
-static inline void tryEmulateTAG(msg_t *pM, bool bLockMutex)
+static inline void tryEmulateTAG(msg_t *pM, sbool bLockMutex)
 {
 	size_t lenTAG;
 	uchar bufTAG[CONF_TAG_MAXSIZE];
@@ -1603,8 +1724,11 @@ static inline void tryEmulateTAG(msg_t *pM, bool bLockMutex)
 
 	if(bLockMutex == LOCK_MUTEX)
 		MsgLock(pM);
-	if(pM->iLenTAG > 0)
+	if(pM->iLenTAG > 0) {
+		if(bLockMutex == LOCK_MUTEX)
+			MsgUnlock(pM);
 		return; /* done, no need to emulate */
+	}
 	
 	if(getProtocolVersion(pM) == 1) {
 		if(!strcmp(getPROCID(pM, MUTEX_ALREADY_LOCKED), "-")) {
@@ -1614,7 +1738,7 @@ static inline void tryEmulateTAG(msg_t *pM, bool bLockMutex)
 			/* now we can try to emulate */
 			lenTAG = snprintf((char*)bufTAG, CONF_TAG_MAXSIZE, "%s[%s]",
 					  getAPPNAME(pM, MUTEX_ALREADY_LOCKED), getPROCID(pM, MUTEX_ALREADY_LOCKED));
-			bufTAG[32] = '\0'; /* just to make sure... */
+			bufTAG[sizeof(bufTAG)-1] = '\0'; /* just to make sure... */
 			MsgSetTAG(pM, bufTAG, lenTAG);
 		}
 	}
@@ -1623,7 +1747,7 @@ static inline void tryEmulateTAG(msg_t *pM, bool bLockMutex)
 }
 
 
-static inline void
+void
 getTAG(msg_t *pM, uchar **ppBuf, int *piLen)
 {
 	if(pM == NULL) {
@@ -1648,12 +1772,13 @@ int getHOSTNAMELen(msg_t *pM)
 	if(pM == NULL)
 		return 0;
 	else
-		if(pM->pszHOSTNAME == NULL)
-			if(pM->pRcvFrom == NULL)
+		if(pM->pszHOSTNAME == NULL) {
+			resolveDNS(pM);
+			if(pM->rcvFrom.pRcvFrom == NULL)
 				return 0;
 			else
-				return prop.GetStringLen(pM->pRcvFrom);
-		else
+				return prop.GetStringLen(pM->rcvFrom.pRcvFrom);
+		} else
 			return pM->iLenHOSTNAME;
 }
 
@@ -1664,12 +1789,13 @@ char *getHOSTNAME(msg_t *pM)
 		return "";
 	else
 		if(pM->pszHOSTNAME == NULL) {
-			if(pM->pRcvFrom == NULL) {
+			resolveDNS(pM);
+			if(pM->rcvFrom.pRcvFrom == NULL) {
 				return "";
 			} else {
 				uchar *psz;
 				int len;
-				prop.GetString(pM->pRcvFrom, &psz, &len);
+				prop.GetString(pM->rcvFrom.pRcvFrom, &psz, &len);
 				return (char*) psz;
 			}
 		} else {
@@ -1683,13 +1809,15 @@ uchar *getRcvFrom(msg_t *pM)
 	uchar *psz;
 	int len;
 	BEGINfunc
+
 	if(pM == NULL) {
 		psz = UCHAR_CONSTANT("");
 	} else {
-		if(pM->pRcvFrom == NULL)
+		resolveDNS(pM);
+		if(pM->rcvFrom.pRcvFrom == NULL)
 			psz = UCHAR_CONSTANT("");
 		else
-			prop.GetString(pM->pRcvFrom, &psz, &len);
+			prop.GetString(pM->rcvFrom.pRcvFrom, &psz, &len);
 	}
 	ENDfunc
 	return psz;
@@ -1729,14 +1857,22 @@ static int getStructuredDataLen(msg_t *pM)
  */
 static inline char *getStructuredData(msg_t *pM)
 {
-	return (pM->pCSStrucData == NULL) ? "-" : (char*) rsCStrGetSzStrNoNULL(pM->pCSStrucData);
+	uchar *pszRet;
+
+	MsgLock(pM);
+	if(pM->pCSStrucData == NULL)
+		pszRet = UCHAR_CONSTANT("-");
+	else 
+		pszRet = rsCStrGetSzStrNoNULL(pM->pCSStrucData);
+	MsgUnlock(pM);
+	return (char*) pszRet;
 }
 
 
 /* check if we have a ProgramName, and, if not, try to aquire/emulate it.
  * rgerhards, 2009-06-26
  */
-static inline void prepareProgramName(msg_t *pM, bool bLockMutex)
+static inline void prepareProgramName(msg_t *pM, sbool bLockMutex)
 {
 	if(pM->pCSProgName == NULL) {
 		if(bLockMutex == LOCK_MUTEX)
@@ -1755,7 +1891,7 @@ static inline void prepareProgramName(msg_t *pM, bool bLockMutex)
 /* get the length of the "programname" sz string
  * rgerhards, 2005-10-19
  */
-int getProgramNameLen(msg_t *pM, bool bLockMutex)
+int getProgramNameLen(msg_t *pM, sbool bLockMutex)
 {
 	assert(pM != NULL);
 	prepareProgramName(pM, bLockMutex);
@@ -1766,10 +1902,20 @@ int getProgramNameLen(msg_t *pM, bool bLockMutex)
 /* get the "programname" as sz string
  * rgerhards, 2005-10-19
  */
-char *getProgramName(msg_t *pM, bool bLockMutex)
+uchar *getProgramName(msg_t *pM, sbool bLockMutex)
 {
-	prepareProgramName(pM, bLockMutex);
-	return (pM->pCSProgName == NULL) ? "" : (char*) rsCStrGetSzStrNoNULL(pM->pCSProgName);
+	uchar *pszRet;
+
+	if(bLockMutex == LOCK_MUTEX)
+		MsgLock(pM);
+	prepareProgramName(pM, MUTEX_ALREADY_LOCKED);
+	if(pM->pCSProgName == NULL)
+		pszRet = UCHAR_CONSTANT("");
+	else 
+		pszRet = rsCStrGetSzStrNoNULL(pM->pCSProgName);
+	if(bLockMutex == LOCK_MUTEX)
+		MsgUnlock(pM);
+	return pszRet;
 }
 
 
@@ -1786,7 +1932,7 @@ static void tryEmulateAPPNAME(msg_t *pM)
 
 	if(getProtocolVersion(pM) == 0) {
 		/* only then it makes sense to emulate */
-		MsgSetAPPNAME(pM, getProgramName(pM, MUTEX_ALREADY_LOCKED));
+		MsgSetAPPNAME(pM, (char*)getProgramName(pM, MUTEX_ALREADY_LOCKED));
 	}
 }
 
@@ -1796,7 +1942,7 @@ static void tryEmulateAPPNAME(msg_t *pM)
  * This must be called WITHOUT the message lock being held.
  * rgerhards, 2009-06-26
  */
-static inline void prepareAPPNAME(msg_t *pM, bool bLockMutex)
+static inline void prepareAPPNAME(msg_t *pM, sbool bLockMutex)
 {
 	if(pM->pCSAPPNAME == NULL) {
 		if(bLockMutex == LOCK_MUTEX)
@@ -1813,16 +1959,26 @@ static inline void prepareAPPNAME(msg_t *pM, bool bLockMutex)
 
 /* rgerhards, 2005-11-24
  */
-char *getAPPNAME(msg_t *pM, bool bLockMutex)
+char *getAPPNAME(msg_t *pM, sbool bLockMutex)
 {
+	uchar *pszRet;
+
 	assert(pM != NULL);
-	prepareAPPNAME(pM, bLockMutex);
-	return (pM->pCSAPPNAME == NULL) ? "" : (char*) rsCStrGetSzStrNoNULL(pM->pCSAPPNAME);
+	if(bLockMutex == LOCK_MUTEX)
+		MsgLock(pM);
+	prepareAPPNAME(pM, MUTEX_ALREADY_LOCKED);
+	if(pM->pCSAPPNAME == NULL)
+		pszRet = UCHAR_CONSTANT("");
+	else 
+		pszRet = rsCStrGetSzStrNoNULL(pM->pCSAPPNAME);
+	if(bLockMutex == LOCK_MUTEX)
+		MsgUnlock(pM);
+	return (char*)pszRet;
 }
 
 /* rgerhards, 2005-11-24
  */
-static int getAPPNAMELen(msg_t *pM, bool bLockMutex)
+static int getAPPNAMELen(msg_t *pM, sbool bLockMutex)
 {
 	assert(pM != NULL);
 	prepareAPPNAME(pM, bLockMutex);
@@ -1845,6 +2001,28 @@ void MsgSetInputName(msg_t *pThis, prop_t *inputName)
 }
 
 
+/* Set the pfrominet socket store, so that we can obtain the peer at some
+ * later time. Note that we do not check if pRcvFrom is already set, so this
+ * function must only be called during message creation.
+ * NOTE: msgFlags is NOT set. While this is somewhat a violation of layers,
+ * it is done because it gains us some performance. So the caller must make
+ * sure the message flags are properly maintained. For all current callers,
+ * this is always the case and without extra effort required.
+ * rgerhards, 2009-11-17
+ */
+rsRetVal
+msgSetFromSockinfo(msg_t *pThis, struct sockaddr_storage *sa){ 
+	DEFiRet;
+	assert(pThis->rcvFrom.pRcvFrom == NULL);
+
+	CHKmalloc(pThis->rcvFrom.pfrominet = malloc(sizeof(struct sockaddr_storage)));
+	memcpy(pThis->rcvFrom.pfrominet, sa, sizeof(struct sockaddr_storage));
+
+finalize_it:
+	RETiRet;
+}
+
+
 /* rgerhards 2008-09-10: set RcvFrom name in msg object. This calls AddRef()
  * on the property, because this must be done in all current cases and there
  * is no case expected where this may not be necessary.
@@ -1855,9 +2033,15 @@ void MsgSetRcvFrom(msg_t *pThis, prop_t *new)
 	assert(pThis != NULL);
 
 	prop.AddRef(new);
-	if(pThis->pRcvFrom != NULL)
-		prop.Destruct(&pThis->pRcvFrom);
-	pThis->pRcvFrom = new;
+	if(pThis->msgFlags & NEEDS_DNSRESOL) {
+		if(pThis->rcvFrom.pfrominet != NULL)
+		free(pThis->rcvFrom.pfrominet);
+		pThis->msgFlags &= ~NEEDS_DNSRESOL;
+	} else {
+		if(pThis->rcvFrom.pRcvFrom != NULL)
+			prop.Destruct(&pThis->rcvFrom.pRcvFrom);
+	}
+	pThis->rcvFrom.pRcvFrom = new;
 }
 
 
@@ -1939,7 +2123,7 @@ void MsgSetHOSTNAME(msg_t *pThis, uchar* pszHOSTNAME, int lenHOSTNAME)
 	if(pThis->iLenHOSTNAME < CONF_HOSTNAME_BUFSIZE) {
 		/* small enough: use fixed buffer (faster!) */
 		pThis->pszHOSTNAME = pThis->szHOSTNAME;
-	} else if((pThis->pszHOSTNAME = (uchar*) malloc(pThis->iLenHOSTNAME + 1)) == NULL) {
+	} else if((pThis->pszHOSTNAME = (uchar*) MALLOC(pThis->iLenHOSTNAME + 1)) == NULL) {
 		/* truncate message, better than completely loosing it... */
 		pThis->pszHOSTNAME = pThis->szHOSTNAME;
 		pThis->iLenHOSTNAME = CONF_HOSTNAME_BUFSIZE - 1;
@@ -1991,7 +2175,7 @@ rsRetVal MsgReplaceMSG(msg_t *pThis, uchar* pszMSG, int lenMSG)
 	lenNew = pThis->iLenRawMsg + lenMSG - pThis->iLenMSG;
 	if(lenMSG > pThis->iLenMSG && lenNew >= CONF_RAWMSG_BUFSIZE) {
 		/*  we have lost our "bet" and need to alloc a new buffer ;) */
-		CHKmalloc(bufNew = malloc(lenNew + 1));
+		CHKmalloc(bufNew = MALLOC(lenNew + 1));
 		memcpy(bufNew, pThis->pszRawMsg, pThis->offMSG);
 		if(pThis->pszRawMsg != pThis->szRawMsg)
 			free(pThis->pszRawMsg);
@@ -2024,7 +2208,7 @@ void MsgSetRawMsg(msg_t *pThis, char* pszRawMsg, size_t lenMsg)
 	if(pThis->iLenRawMsg < CONF_RAWMSG_BUFSIZE) {
 		/* small enough: use fixed buffer (faster!) */
 		pThis->pszRawMsg = pThis->szRawMsg;
-	} else if((pThis->pszRawMsg = (uchar*) malloc(pThis->iLenRawMsg + 1)) == NULL) {
+	} else if((pThis->pszRawMsg = (uchar*) MALLOC(pThis->iLenRawMsg + 1)) == NULL) {
 		/* truncate message, better than completely loosing it... */
 		pThis->pszRawMsg = pThis->szRawMsg;
 		pThis->iLenRawMsg = CONF_RAWMSG_BUFSIZE - 1;
@@ -2080,7 +2264,7 @@ static uchar *getNOW(eNOWType eNow)
 	uchar *pBuf;
 	struct syslogTime t;
 
-	if((pBuf = (uchar*) malloc(sizeof(uchar) * tmpBUFSIZE)) == NULL) {
+	if((pBuf = (uchar*) MALLOC(sizeof(uchar) * tmpBUFSIZE)) == NULL) {
 		return NULL;
 	}
 
@@ -2191,12 +2375,13 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			break;
 		case PROP_HOSTNAME:
 			pRes = (uchar*)getHOSTNAME(pMsg);
+			bufLen = getHOSTNAMELen(pMsg);
 			break;
 		case PROP_SYSLOGTAG:
 			getTAG(pMsg, &pRes, &bufLen);
 			break;
 		case PROP_RAWMSG:
-			pRes = (uchar*)getRawMsg(pMsg);
+			getRawMsg(pMsg, &pRes, &bufLen);
 			break;
 		/* enable this, if someone actually uses UxTradMsg, delete after some  time has
 		 * passed and nobody complained -- rgerhards, 2009-06-16
@@ -2217,7 +2402,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			pRes = (uchar*)getPRI(pMsg);
 			break;
 		case PROP_PRI_TEXT:
-			pBuf = malloc(20 * sizeof(uchar));
+			pBuf = MALLOC(20 * sizeof(uchar));
 			if(pBuf == NULL) {
 				RET_OUT_OF_MEMORY;
 			} else {
@@ -2227,6 +2412,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			break;
 		case PROP_IUT:
 			pRes = UCHAR_CONSTANT("1"); /* always 1 for syslog messages (a MonitorWare thing;)) */
+			bufLen = 1;
 			break;
 		case PROP_SYSLOGFACILITY:
 			pRes = (uchar*)getFacility(pMsg);
@@ -2244,7 +2430,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			pRes = (uchar*)getTimeGenerated(pMsg, pTpe->data.field.eDateFormat);
 			break;
 		case PROP_PROGRAMNAME:
-			pRes = (uchar*)getProgramName(pMsg, LOCK_MUTEX);
+			pRes = getProgramName(pMsg, LOCK_MUTEX);
 			break;
 		case PROP_PROTOCOL_VERSION:
 			pRes = (uchar*)getProtocolVersionString(pMsg);
@@ -2312,6 +2498,12 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 		case PROP_SYS_MYHOSTNAME:
 			pRes = glbl.GetLocalHostName();
 			break;
+		case PROP_SYS_BOM:
+			if(*pbMustBeFreed == 1)
+				free(pRes);
+			pRes = (uchar*) "\xEF\xBB\xBF";
+			*pbMustBeFreed = 0;
+			break;
 		default:
 			/* there is no point in continuing, we may even otherwise render the
 			 * error message unreadable. rgerhards, 2007-07-10
@@ -2372,7 +2564,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			/* we got our end pointer, now do the copy */
 			/* TODO: code copied from below, this is a candidate for a separate function */
 			iLen = pFldEnd - pFld + 1; /* the +1 is for an actual char, NOT \0! */
-			pBufStart = pBuf = malloc((iLen + 1) * sizeof(char));
+			pBufStart = pBuf = MALLOC((iLen + 1) * sizeof(char));
 			if(pBuf == NULL) {
 				if(*pbMustBeFreed == 1)
 					free(pRes);
@@ -2418,7 +2610,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			; /*DO NOTHING*/
 		} else {
 			iLen = iTo - iFrom + 1; /* the +1 is for an actual char, NOT \0! */
-			pBufStart = pBuf = malloc((iLen + 1) * sizeof(char));
+			pBufStart = pBuf = MALLOC((iLen + 1) * sizeof(char));
 			if(pBuf == NULL) {
 				if(*pbMustBeFreed == 1)
 					free(pRes);
@@ -2484,7 +2676,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 							bFound = 1;
 						} else {
 							dbgprintf("regex found at offset %d, new offset %d, tries %d\n",
-								  iOffs, iOffs + pmatch[0].rm_eo, iTry);
+								  iOffs, (int) (iOffs + pmatch[0].rm_eo), iTry);
 							iOffs += pmatch[0].rm_eo;
 							++iTry;
 						}
@@ -2538,7 +2730,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 
 					iLenBuf = pmatch[pTpe->data.field.iSubMatchToUse].rm_eo
 						  - pmatch[pTpe->data.field.iSubMatchToUse].rm_so;
-					pB = malloc((iLenBuf + 1) * sizeof(uchar));
+					pB = MALLOC((iLenBuf + 1) * sizeof(uchar));
 
 					if (pB == NULL) {
 						if (*pbMustBeFreed == 1)
@@ -2595,7 +2787,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			uchar *pBStart;
 			uchar *pB;
 			uchar *pSrc;
-			pBStart = pB = malloc((bufLen + 1) * sizeof(char));
+			pBStart = pB = MALLOC((bufLen + 1) * sizeof(char));
 			if(pB == NULL) {
 				if(*pbMustBeFreed == 1)
 					free(pRes);
@@ -2641,7 +2833,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			}
 
 			if(bDropped) {
-				pDst = pDstStart = malloc(iLenBuf + 1);
+				pDst = pDstStart = MALLOC(iLenBuf + 1);
 				if(pDst == NULL) {
 					if(*pbMustBeFreed == 1)
 						free(pRes);
@@ -2676,7 +2868,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			} else {
 				if(bufLen == -1)
 					bufLen = ustrlen(pRes);
-				pDst = pDstStart = malloc(bufLen + 1);
+				pDst = pDstStart = MALLOC(bufLen + 1);
 				if(pDst == NULL) {
 					if(*pbMustBeFreed == 1)
 						free(pRes);
@@ -2715,7 +2907,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 				int i;
 
 				iLenBuf += iNumCC * 4;
-				pBStart = pB = malloc((iLenBuf + 1) * sizeof(uchar));
+				pBStart = pB = MALLOC((iLenBuf + 1) * sizeof(uchar));
 				if(pB == NULL) {
 					if(*pbMustBeFreed == 1)
 						free(pRes);
@@ -2741,6 +2933,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 		}
 	}
 
+dbgprintf("prop repl 4, pRes='%s', len %d\n", pRes, bufLen);
 	/* Take care of spurious characters to make the property safe
 	 * for a path definition
 	 */
@@ -2760,7 +2953,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			}
 			
 			if(bDropped) {
-				pDst = pDstStart = malloc(iLenBuf + 1);
+				pDst = pDstStart = MALLOC(iLenBuf + 1);
 				if(pDst == NULL) {
 					if(*pbMustBeFreed == 1)
 						free(pRes);
@@ -2795,7 +2988,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			} else {
 				if(bufLen == -1)
 					bufLen = ustrlen(pRes);
-				pDst = pDstStart = malloc(bufLen + 1);
+				pDst = pDstStart = MALLOC(bufLen + 1);
 				if(pDst == NULL) {
 					if(*pbMustBeFreed == 1)
 						free(pRes);
@@ -2818,7 +3011,13 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 		}
 		
 		/* check for "." and ".." (note the parenthesis in the if condition!) */
-		if((*pRes == '.') && (*(pRes + 1) == '\0' || (*(pRes + 1) == '.' && *(pRes + 2) == '\0'))) {
+		if(*pRes == '\0') {
+			if(*pbMustBeFreed == 1)
+				free(pRes);
+			pRes = UCHAR_CONSTANT("_");
+			bufLen = 1;
+			*pbMustBeFreed = 0;
+		} else if((*pRes == '.') && (*(pRes + 1) == '\0' || (*(pRes + 1) == '.' && *(pRes + 2) == '\0'))) {
 			uchar *pTmp = pRes;
 
 			if(*(pRes + 1) == '\0')
@@ -2827,12 +3026,6 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 				pRes = UCHAR_CONSTANT("_.");;
 			if(*pbMustBeFreed == 1)
 				free(pTmp);
-			*pbMustBeFreed = 0;
-		} else if(*pRes == '\0') {
-			if(*pbMustBeFreed == 1)
-				free(pRes);
-			pRes = UCHAR_CONSTANT("_");
-			bufLen = 1;
 			*pbMustBeFreed = 0;
 		}
 	}
@@ -2851,7 +3044,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			/* check if we need to obtain a private copy */
 			if(*pbMustBeFreed == 0) {
 				/* ok, original copy, need a private one */
-				pB = malloc((iLn + 1) * sizeof(uchar));
+				pB = MALLOC((iLn + 1) * sizeof(uchar));
 				if(pB == NULL) {
 					RET_OUT_OF_MEMORY;
 				}
@@ -2872,7 +3065,6 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 	if(pTpe->data.field.options.bCSV) {
 		/* we need to obtain a private copy, as we need to at least add the double quotes */
 		int iBufLen;
-		int i;
 		uchar *pBStart;
 		uchar *pDst;
 		uchar *pSrc;
@@ -2880,14 +3072,13 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 			bufLen = ustrlen(pRes);
 		iBufLen = bufLen;
 		/* the malloc may be optimized, we currently use the worst case... */
-		pBStart = pDst = malloc((2 * iBufLen + 3) * sizeof(uchar));
+		pBStart = pDst = MALLOC((2 * iBufLen + 3) * sizeof(uchar));
 		if(pDst == NULL) {
 			if(*pbMustBeFreed == 1)
 				free(pRes);
 			RET_OUT_OF_MEMORY;
 		}
 		pSrc = pRes;
-		i = 0;
 		*pDst++ = '"'; /* starting quote */
 		while(*pSrc) {
 			if(*pSrc == '"')
@@ -2907,6 +3098,7 @@ uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
 		bufLen = ustrlen(pRes);
 	*pPropLen = bufLen;
 
+dbgprintf("end prop repl, pRes='%s', len %d\n", pRes, bufLen);
 	ENDfunc
 	return(pRes);
 }
@@ -3021,8 +3213,13 @@ rsRetVal MsgSetProperty(msg_t *pThis, var_t *pProp)
 		memcpy(&pThis->tRcvdAt, &pProp->val.vSyslogTime, sizeof(struct syslogTime));
 	} else if(isProp("tTIMESTAMP")) {
 		memcpy(&pThis->tTIMESTAMP, &pProp->val.vSyslogTime, sizeof(struct syslogTime));
+	} else if(isProp("pszRuleset")) {
+		MsgSetRulesetByName(pThis, pProp->val.pStr);
 	} else if(isProp("pszMSG")) {
 		dbgprintf("no longer supported property pszMSG silently ignored\n");
+	} else {
+		dbgprintf("unknown supported property '%s' silently ignored\n",
+			  rsCStrGetSzStrNoNULL(pProp->pcsName));
 	}
 
 finalize_it:
@@ -3048,7 +3245,7 @@ static rsRetVal msgConstructFinalizer(msg_t *pThis)
  * rgerhards, 2008-01-14
  */
 static rsRetVal
-MsgGetSeverity(obj_t *pThis, int *piSeverity)
+MsgGetSeverity(obj_t_ptr pThis, int *piSeverity)
 {
 	ISOBJ_TYPE_assert(pThis, msg);
 	assert(piSeverity != NULL);
@@ -3081,6 +3278,10 @@ BEGINObjClassInit(msg, 1, OBJ_IS_CORE_MODULE)
 	funcUnlock = MsgLockingDummy;
 	funcDeleteMutex = MsgLockingDummy;
 	funcMsgPrepareEnqueue = MsgLockingDummy;
+	/* some more inits */
+#	if HAVE_MALLOC_TRIM
+	INIT_ATOMIC_HELPER_MUT(mutTrimCtr);
+#	endif
 ENDObjClassInit(msg)
 /* vim:set ai:
  */

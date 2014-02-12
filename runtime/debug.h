@@ -3,31 +3,34 @@
  * Definitions for the debug and run-time analysis support module.
  * Contains a lot of macros.
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef DEBUG_H_INCLUDED
 #define DEBUG_H_INCLUDED
 
 #include <pthread.h>
 #include "obj-types.h"
+
+/* some settings for various debug modes */
+#define DEBUG_OFF	0
+#define DEBUG_ONDEMAND	1
+#define DEBUG_FULL	2
 
 /* external static data elements (some time to be replaced) */
 extern int Debug;		/* debug flag  - read-only after startup */
@@ -99,6 +102,7 @@ void dbgExitFunc(dbgFuncDB_t *pFuncDB, int iStackPtrRestore, int iRet);
 void dbgSetExecLocation(int iStackPtr, int line);
 void dbgSetThrdName(uchar *pszName);
 void dbgPrintAllDebugInfo(void);
+void *dbgmalloc(size_t size);
 
 /* macros */
 #define DBGPRINTF(...) if(Debug) { dbgprintf(__VA_ARGS__); }
@@ -124,6 +128,12 @@ void dbgPrintAllDebugInfo(void);
 #	define RUNLOG
 #	define RUNLOG_VAR(fmt, x)
 #	define RUNLOG_STR(str)
+#endif
+
+#ifdef MEMCHECK
+#	define MALLOC(x) dbgmalloc(x)
+#else
+#	define MALLOC(x) malloc(x)
 #endif
 
 /* mutex operations */

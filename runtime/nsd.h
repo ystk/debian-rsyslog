@@ -4,25 +4,23 @@
  * implemented by concrete classes. As such, no nsd data type itself
  * is defined.
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef INCLUDED_NSD_H
 #define INCLUDED_NSD_H
@@ -86,5 +84,14 @@ BEGINinterface(nsdsel) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*IsReady)(nsdsel_t *pNsdsel, nsd_t *pNsd, nsdsel_waitOp_t waitOp, int *pbIsReady);
 ENDinterface(nsdsel)
 #define nsdselCURR_IF_VERSION 1 /* increment whenever you change the interface structure! */
+
+/* interface  for the epoll call */
+BEGINinterface(nsdpoll) /* name must also be changed in ENDinterface macro! */
+	rsRetVal (*Construct)(nsdpoll_t **ppThis);
+	rsRetVal (*Destruct)(nsdpoll_t **ppThis);
+	rsRetVal (*Ctl)(nsdpoll_t *pNsdpoll, nsd_t *pNsd, int id, void *pUsr, int mode, int op);
+	rsRetVal (*Wait)(nsdpoll_t *pNsdpoll, int timeout, int *idRdy, void **ppUsr);
+ENDinterface(nsdpoll)
+#define nsdpollCURR_IF_VERSION 1 /* increment whenever you change the interface structure! */
 
 #endif /* #ifndef INCLUDED_NSD_H */

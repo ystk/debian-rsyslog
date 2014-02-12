@@ -16,27 +16,12 @@
  * parts of the code have been rewritten.
  *
  * This Project was intiated and is maintained by
- * Rainer Gerhards <rgerhards@hq.adiscon.com>. See
- * AUTHORS to learn who helped make it become a reality.
+ * Rainer Gerhards <rgerhards@hq.adiscon.com>.
  *
- * If you have questions about rsyslogd in general, please email
- * info@adiscon.com. To learn more about rsyslogd, please visit
- * http://www.rsyslog.com.
- *
- * \author Rainer Gerhards <rgerhards@adiscon.com>
- * \date 2003-10-17
- *       Some initial modifications on the sysklogd package to support
- *       liblogging. These have actually not yet been merged to the
- *       source you see currently (but they hopefully will)
- *
- * \date 2004-10-28
- *       Restarted the modifications of sysklogd. This time, we
- *       focus on a simpler approach first. The initial goal is to
- *       provide MySQL database support (so that syslogd can log
- *       to the database).
+ * For further information, please see http://www.rsyslog.com
  *
  * rsyslog - An Enhanced syslogd Replacement.
- * Copyright 2003-2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2003-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -129,24 +114,33 @@
 #include "omfile.h"
 #include "ompipe.h"
 #include "omdiscard.h"
+#include "pmrfc5424.h"
+#include "pmrfc3164.h"
+#include "smfile.h"
+#include "smtradfile.h"
+#include "smfwd.h"
+#include "smtradfwd.h"
 #include "threads.h"
+#include "wti.h"
 #include "queue.h"
 #include "stream.h"
 #include "conf.h"
 #include "errmsg.h"
 #include "datetime.h"
 #include "parser.h"
+#include "batch.h"
 #include "unicode-helper.h"
 #include "ruleset.h"
 #include "rule.h"
 #include "net.h"
 #include "vm.h"
 #include "prop.h"
+#include "sd-daemon.h"
 
 /* definitions for objects we access */
 DEFobjCurrIf(obj)
 DEFobjCurrIf(glbl)
-DEFobjCurrIf(datetime)
+DEFobjCurrIf(datetime) /* TODO: make go away! */
 DEFobjCurrIf(conf)
 DEFobjCurrIf(expr)
 DEFobjCurrIf(module)
@@ -154,24 +148,14 @@ DEFobjCurrIf(errmsg)
 DEFobjCurrIf(rule)
 DEFobjCurrIf(ruleset)
 DEFobjCurrIf(prop)
+DEFobjCurrIf(parser)
 DEFobjCurrIf(net) /* TODO: make go away! */
 
 
 /* forward definitions */
 static rsRetVal GlobalClassExit(void);
+static rsRetVal queryLocalHostname(void);
 
-
-#ifndef UTMP_FILE
-#ifdef UTMP_FILENAME
-#define UTMP_FILE UTMP_FILENAME
-#else
-#ifdef _PATH_UTMP
-#define UTMP_FILE _PATH_UTMP
-#else
-#define UTMP_FILE "/etc/utmp"
-#endif
-#endif
-#endif
 
 #ifndef _PATH_LOGCONF 
 #define _PATH_LOGCONF	"/etc/rsyslog.conf"
@@ -224,8 +208,6 @@ static pid_t myPid;	/* our pid for use in self-generated messages, e.g. on start
 /* mypid is read-only after the initial fork() */
 static int bHadHUP = 0; /* did we have a HUP? */
 
-static int bParseHOSTNAMEandTAG = 1; /* global config var: should the hostname and tag be
-                                      * parsed inside message - rgerhards, 2006-03-13 */
 static int bFinished = 0;	/* used by termination signal handler, read-only except there
 				 * is either 0 or the number of the signal that requested the
  				 * termination.
@@ -250,19 +232,18 @@ typedef struct legacyOptsLL_s {
 legacyOptsLL_t *pLegacyOptsLL = NULL;
 
 /* global variables for config file state */
-int	bDropTrailingLF = 1; /* drop trailing LF's on reception? */
 int	iCompatibilityMode = 0;		/* version we should be compatible with; 0 means sysklogd. It is
 					   the default, so if no -c<n> option is given, we make ourselvs
 					   as compatible to sysklogd as possible. */
+#define DFLT_bLogStatusMsgs 1
+static int	bLogStatusMsgs = DFLT_bLogStatusMsgs;	/* log rsyslog start/stop/HUP messages? */
 static int	bDebugPrintTemplateList = 1;/* output template list in debug mode? */
 static int	bDebugPrintCfSysLineHandlerList = 1;/* output cfsyslinehandler list in debug mode? */
 static int	bDebugPrintModuleList = 1;/* output module list in debug mode? */
-uchar	cCCEscapeChar = '\\';/* character to be used to start an escape sequence for control chars */
-int 	bEscapeCCOnRcv = 1; /* escape control characters on reception: 0 - no, 1 - yes */
 static int	bErrMsgToStderr = 1; /* print error messages to stderr (in addition to everything else)? */
 int 	bReduceRepeatMsgs; /* reduce repeated message - 0 - no, 1 - yes */
+int 	bAbortOnUncleanConfig = 0; /* abort run (rather than starting with partial config) if there was any issue in conf */
 int	bActExecWhenPrevSusp; /* execute action only when previous one was suspended? */
-int	iActExecOnceInterval = 0; /* execute action once every nn seconds */
 /* end global config file state variables */
 
 int	MarkInterval = 20 * 60;	/* interval between marks in seconds - read-only after startup */
@@ -279,7 +260,7 @@ extern	int errno;
 
 static uchar *pszConfDAGFile = NULL;				/* name of config DAG file, non-NULL means generate one */
 /* main message queue and its configuration parameters */
-static qqueue_t *pMsgQueue = NULL;				/* the main message queue */
+qqueue_t *pMsgQueue = NULL;				/* the main message queue */
 static int iMainMsgQueueSize = 10000;				/* size of the main message queue above */
 static int iMainMsgQHighWtrMark = 8000;				/* high water mark for disk-assisted queues */
 static int iMainMsgQLowWtrMark = 2000;				/* low water mark for disk-assisted queues */
@@ -298,37 +279,10 @@ static int iMainMsgQtoWrkShutdown = 60000;			/* timeout for worker thread shutdo
 static int iMainMsgQWrkMinMsgs = 100;				/* minimum messages per worker needed to start a new one */
 static int iMainMsgQDeqSlowdown = 0;				/* dequeue slowdown (simple rate limiting) */
 static int64 iMainMsgQueMaxDiskSpace = 0;			/* max disk space allocated 0 ==> unlimited */
+static int64 iMainMsgQueDeqBatchSize = 32;			/* dequeue batch size */
 static int bMainMsgQSaveOnShutdown = 1;				/* save queue on shutdown (when DA enabled)? */
 static int iMainMsgQueueDeqtWinFromHr = 0;			/* hour begin of time frame when queue is to be dequeued */
 static int iMainMsgQueueDeqtWinToHr = 25;			/* hour begin of time frame when queue is to be dequeued */
-
-
-/* support for simple textual representation of FIOP names
- * rgerhards, 2005-09-27
- */
-char*
-getFIOPName(unsigned iFIOP)
-{
-	char *pRet;
-	switch(iFIOP) {
-		case FIOP_CONTAINS:
-			pRet = "contains";
-			break;
-		case FIOP_ISEQUAL:
-			pRet = "isequal";
-			break;
-		case FIOP_STARTSWITH:
-			pRet = "startswith";
-			break;
-		case FIOP_REGEX:
-			pRet = "regex";
-			break;
-		default:
-			pRet = "NOP";
-			break;
-	}
-	return pRet;
-}
 
 
 /* Reset config variables to default values.
@@ -336,14 +290,13 @@ getFIOPName(unsigned iFIOP)
  */
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
 {
-	cCCEscapeChar = '#';
+	bLogStatusMsgs = DFLT_bLogStatusMsgs;
 	bActExecWhenPrevSusp = 0;
-	iActExecOnceInterval = 0;
 	bDebugPrintTemplateList = 1;
 	bDebugPrintCfSysLineHandlerList = 1;
 	bDebugPrintModuleList = 1;
-	bEscapeCCOnRcv = 1; /* default is to escape control characters */
 	bReduceRepeatMsgs = 0;
+	bAbortOnUncleanConfig = 0;
 	free(pszMainMsgQFName);
 	pszMainMsgQFName = NULL;
 	iMainMsgQueueSize = 10000;
@@ -364,6 +317,7 @@ static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __a
 	bMainMsgQSaveOnShutdown = 1;
 	MainMsgQueType = QUEUETYPE_FIXED_ARRAY;
 	iMainMsgQueMaxDiskSpace = 0;
+	iMainMsgQueDeqBatchSize = 32;
 	glbliActionResumeRetryCount = 0;
 
 	return RS_RET_OK;
@@ -371,17 +325,18 @@ static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __a
 
 
 /* hardcoded standard templates (used for defaults) */
-static uchar template_DebugFormat[] = "\"Debug line with all properties:\nFROMHOST: '%FROMHOST%', fromhost-ip: '%fromhost-ip%', HOSTNAME: '%HOSTNAME%', PRI: %PRI%,\nsyslogtag '%syslogtag%', programname: '%programname%', APP-NAME: '%APP-NAME%', PROCID: '%PROCID%', MSGID: '%MSGID%',\nTIMESTAMP: '%TIMESTAMP%', STRUCTURED-DATA: '%STRUCTURED-DATA%',\nmsg: '%msg%'\nescaped msg: '%msg:::drop-cc%'\nrawmsg: '%rawmsg%'\n\n\"";
+static uchar template_DebugFormat[] = "\"Debug line with all properties:\nFROMHOST: '%FROMHOST%', fromhost-ip: '%fromhost-ip%', HOSTNAME: '%HOSTNAME%', PRI: %PRI%,\nsyslogtag '%syslogtag%', programname: '%programname%', APP-NAME: '%APP-NAME%', PROCID: '%PROCID%', MSGID: '%MSGID%',\nTIMESTAMP: '%TIMESTAMP%', STRUCTURED-DATA: '%STRUCTURED-DATA%',\nmsg: '%msg%'\nescaped msg: '%msg:::drop-cc%'\ninputname: %inputname% rawmsg: '%rawmsg%'\n\n\"";
 static uchar template_SyslogProtocol23Format[] = "\"<%PRI%>1 %TIMESTAMP:::date-rfc3339% %HOSTNAME% %APP-NAME% %PROCID% %MSGID% %STRUCTURED-DATA% %msg%\n\"";
-static uchar template_TraditionalFileFormat[] = "\"%TIMESTAMP% %HOSTNAME% %syslogtag%%msg:::sp-if-no-1st-sp%%msg:::drop-last-lf%\n\"";
-static uchar template_FileFormat[] = "\"%TIMESTAMP:::date-rfc3339% %HOSTNAME% %syslogtag%%msg:::sp-if-no-1st-sp%%msg:::drop-last-lf%\n\"";
+static uchar template_TraditionalFileFormat[] = "=RSYSLOG_TraditionalFileFormat";
+static uchar template_FileFormat[] = "=RSYSLOG_FileFormat";
+static uchar template_ForwardFormat[] = "=RSYSLOG_ForwardFormat";
+static uchar template_TraditionalForwardFormat[] = "=RSYSLOG_TraditionalForwardFormat";
 static uchar template_WallFmt[] = "\"\r\n\7Message from syslogd@%HOSTNAME% at %timegenerated% ...\r\n %syslogtag%%msg%\n\r\"";
-static uchar template_ForwardFormat[] = "\"<%PRI%>%TIMESTAMP:::date-rfc3339% %HOSTNAME% %syslogtag:1:32%%msg:::sp-if-no-1st-sp%%msg%\"";
-static uchar template_TraditionalForwardFormat[] = "\"<%PRI%>%TIMESTAMP% %HOSTNAME% %syslogtag:1:32%%msg:::sp-if-no-1st-sp%%msg%\"";
 static uchar template_StdUsrMsgFmt[] = "\" %syslogtag%%msg%\n\r\"";
 static uchar template_StdDBFmt[] = "\"insert into SystemEvents (Message, Facility, FromHost, Priority, DeviceReportedTime, ReceivedAt, InfoUnitID, SysLogTag) values ('%msg%', %syslogfacility%, '%HOSTNAME%', %syslogpriority%, '%timereported:::date-mysql%', '%timegenerated:::date-mysql%', %iut%, '%syslogtag%')\",SQL";
 static uchar template_StdPgSQLFmt[] = "\"insert into SystemEvents (Message, Facility, FromHost, Priority, DeviceReportedTime, ReceivedAt, InfoUnitID, SysLogTag) values ('%msg%', %syslogfacility%, '%HOSTNAME%', %syslogpriority%, '%timereported:::date-pgsql%', '%timegenerated:::date-pgsql%', %iut%, '%syslogtag%')\",STDSQL";
-/* end template */
+static uchar template_spoofadr[] = "\"%fromhost-ip%\"";
+/* end templates */
 
 
 /* up to the next comment, prototypes that should be removed by reordering */
@@ -390,7 +345,6 @@ static char **crunch_list(char *list);
 static void reapchild();
 static void debug_switch();
 static void sighup_handler();
-static void processImInternal(void);
 
 
 static int usage(void)
@@ -398,7 +352,7 @@ static int usage(void)
 	fprintf(stderr, "usage: rsyslogd [-c<version>] [-46AdnqQvwx] [-l<hostlist>] [-s<domainlist>]\n"
 			"                [-f<conffile>] [-i<pidfile>] [-N<level>] [-M<module load path>]\n"
 			"                [-u<number>]\n"
-			"To run rsyslogd in native mode, use \"rsyslogd -c3 <other options>\"\n\n"
+			"To run rsyslogd in native mode, use \"rsyslogd -c5 <other options>\"\n\n"
 			"For further information see http://www.rsyslog.com/doc\n");
 	exit(1); /* "good" exit - done to terminate usage() */
 }
@@ -410,6 +364,8 @@ static int usage(void)
  */
 
 /* return back the approximate current number of messages in the main message queue
+ * This number includes the messages that reside in an associated DA queue (if
+ * it exists) -- rgerhards, 2009-10-14
  */
 rsRetVal
 diagGetMainMsgQSize(int *piSize)
@@ -426,7 +382,7 @@ diagGetMainMsgQSize(int *piSize)
 
 
 /* rgerhards, 2005-10-24: crunch_list is called only during option processing. So
- * it is never called once rsyslogd is running (not even when HUPed). This code
+ * it is never called once rsyslogd is running. This code
  * contains some exits, but they are considered safe because they only happen
  * during startup. Anyhow, when we review the code here, we might want to
  * reconsider the exit()s.
@@ -438,7 +394,7 @@ static char **crunch_list(char *list)
 	char **result = NULL;
 
 	p = list;
-	
+
 	/* strip off trailing delimiters */
 	while (p[strlen(p)-1] == LIST_DELIMITER) {
 		count--;
@@ -447,18 +403,18 @@ static char **crunch_list(char *list)
 	/* cut off leading delimiters */
 	while (p[0] == LIST_DELIMITER) {
 		count--;
-		p++; 
+               p++;
 	}
-	
+
 	/* count delimiters to calculate elements */
 	for (count=i=0; p[i]; i++)
 		if (p[i] == LIST_DELIMITER) count++;
-	
-	if ((result = (char **)malloc(sizeof(char *) * (count+2))) == NULL) {
+
+	if ((result = (char **)MALLOC(sizeof(char *) * (count+2))) == NULL) {
 		printf ("Sorry, can't get enough memory, exiting.\n");
 		exit(0); /* safe exit, because only called during startup */
 	}
-	
+
 	/*
 	 * We now can assume that the first and last
 	 * characters are different from any delimiters,
@@ -466,7 +422,7 @@ static char **crunch_list(char *list)
 	 */
 	count = 0;
 	while ((q=strchr(p, LIST_DELIMITER))) {
-		result[count] = (char *) malloc((q - p + 1) * sizeof(char));
+		result[count] = (char *) MALLOC((q - p + 1) * sizeof(char));
 		if (result[count] == NULL) {
 			printf ("Sorry, can't get enough memory, exiting.\n");
 			exit(0); /* safe exit, because only called during startup */
@@ -477,7 +433,7 @@ static char **crunch_list(char *list)
 		count++;
 	}
 	if ((result[count] = \
-	     (char *)malloc(sizeof(char) * strlen(p) + 1)) == NULL) {
+	     (char *)MALLOC(sizeof(char) * strlen(p) + 1)) == NULL) {
 		printf ("Sorry, can't get enough memory, exiting.\n");
 		exit(0); /* safe exit, because only called during startup */
 	}
@@ -523,52 +479,21 @@ void untty(void)
 #endif
 
 
-/* Take a raw input line, decode the message, and print the message
- * on the appropriate log files.
- * rgerhards 2004-11-08: Please note
- * that this function does only a partial decoding. At best, it splits 
- * the PRI part. No further decode happens. The rest is done in 
- * logmsg().
- * Added the iSource parameter so that we know if we have to parse
- * HOSTNAME or not. rgerhards 2004-11-16.
- * changed parameter iSource to bParseHost. For details, see comment in
- * printchopped(). rgerhards 2005-10-06
- * rgerhards: 2008-03-06: added "flags" to allow an input module to specify
- * flags, most importantly to request ignoring the messages' timestamp.
- *
- * rgerhards, 2008-03-19:
- * I added an additional calling parameter to permit specifying the flow
- * control capability of the source.
- *
- * rgerhards, 2008-05-16:
- * I added an additional calling parameter (hnameIP) to enable specifying the IP
- * of a remote host.
- *
- * rgerhards, 2008-09-11:
- * Interface change: added new parameter "InputName", permits the input to provide 
- * a string that identifies it. May be NULL, but must be a valid char* pointer if
- * non-NULL.
- *
- * rgerhards, 2008-10-06:
- * Interface change: added new parameter "stTime", which enables the caller to provide
- * a timestamp that is to be used as timegenerated instead of the current system time.
- * This is meant to facilitate performance optimization. Some inputs support such modes.
- * If stTime is NULL, the current system time is used.
- *
- * rgerhards, 2008-10-09:
- * interface change: bParseHostname removed, now in flags
+/* This takes a received message that must be decoded and submits it to
+ * the main message queue. This is a legacy function which is being provided
+ * to aid older input plugins that do not support message creation via
+ * the new interfaces themselves. It is not recommended to use this
+ * function for new plugins. -- rgerhards, 2009-10-12
  */
-static inline rsRetVal printline(uchar *hname, uchar *hnameIP, uchar *msg, int flags, flowControl_t flowCtlType,
+rsRetVal
+parseAndSubmitMessage(uchar *hname, uchar *hnameIP, uchar *msg, int len, int flags, flowControl_t flowCtlType,
 	prop_t *pInputName, struct syslogTime *stTime, time_t ttGenTime)
 {
-	DEFiRet;
-	register uchar *p;
-	int pri;
+	prop_t *pProp = NULL;
 	msg_t *pMsg;
-	prop_t *propFromHost = NULL;
-	prop_t *propFromHostIP = NULL;
+	DEFiRet;
 
-	/* Now it is time to create the message object (rgerhards) */
+	/* we now create our own message object and submit it to the queue */
 	if(stTime == NULL) {
 		CHKiRet(msgConstruct(&pMsg));
 	} else {
@@ -576,274 +501,17 @@ static inline rsRetVal printline(uchar *hname, uchar *hnameIP, uchar *msg, int f
 	}
 	if(pInputName != NULL)
 		MsgSetInputName(pMsg, pInputName);
+	MsgSetRawMsg(pMsg, (char*)msg, len);
 	MsgSetFlowControlType(pMsg, flowCtlType);
-	MsgSetRawMsgWOSize(pMsg, (char*)msg);
-	
-	/* test for special codes */
-	pri = DEFUPRI;
-	p = msg;
-	if (*p == '<') {
-		pri = 0;
-		while (isdigit((int) *++p))
-		{
-		   pri = 10 * pri + (*p - '0');
-		}
-		if (*p == '>')
-			++p;
-	}
-	if (pri &~ (LOG_FACMASK|LOG_PRIMASK))
-		pri = DEFUPRI;
-	pMsg->iFacility = LOG_FAC(pri);
-	pMsg->iSeverity = LOG_PRI(pri);
+	pMsg->msgFlags  = flags | NEEDS_PARSING;
 
-	/* Now we look at the HOSTNAME. That is a bit complicated...
-	 * If we have a locally received message, it does NOT
-	 * contain any hostname information in the message itself.
-	 * As such, the HOSTNAME is the same as the system that
-	 * the message was received from (that, for obvious reasons,
-	 * being the local host).  rgerhards 2004-11-16
-	 */
-	if((pMsg->msgFlags & PARSE_HOSTNAME) == 0)
-		MsgSetHOSTNAME(pMsg, hname, ustrlen(hname));
-	MsgSetRcvFromStr(pMsg, hname, ustrlen(hname), &propFromHost);
-	CHKiRet(MsgSetRcvFromIPStr(pMsg, hnameIP, ustrlen(hnameIP), &propFromHostIP));
-	MsgSetAfterPRIOffs(pMsg, p - msg);
-	prop.Destruct(&propFromHost);
-	prop.Destruct(&propFromHostIP);
-
-	logmsg(pMsg, flags);
+	MsgSetRcvFromStr(pMsg, hname, ustrlen(hname), &pProp);
+	CHKiRet(prop.Destruct(&pProp));
+	CHKiRet(MsgSetRcvFromIPStr(pMsg, hnameIP, ustrlen(hnameIP), &pProp));
+	CHKiRet(prop.Destruct(&pProp));
+	CHKiRet(submitMsg(pMsg));
 
 finalize_it:
-	RETiRet;
-}
-
-
-/* This takes a received message that must be decoded and submits it to
- * the main message queue. The function calls the necessary parser.
- *
- * rgerhards, 2006-11-30: I have greatly changed this function. Formerly,
- * it tried to reassemble multi-part messages, which is a legacy stock
- * sysklogd concept. In essence, that was that messages not ending with
- * \0 were glued together. As far as I can see, this is a sysklogd
- * specific feature and, from looking at the code, seems to be used
- * pretty seldom (if at all). I remove this now, not the least because it is totally
- * incompatible with upcoming IETF syslog standards. If you experience
- * strange behaviour with messages beeing split across multiple lines,
- * this function here might be the place to look at.
- *
- * Some previous history worth noting:
- * I added the "iSource" parameter. This is needed to distinguish between
- * messages that have a hostname in them (received from the internet) and
- * those that do not have (most prominently /dev/log).  rgerhards 2004-11-16
- * And now I removed the "iSource" parameter and changed it to be "bParseHost",
- * because all that it actually controls is whether the host is parsed or not.
- * For rfc3195 support, we needed to modify the algo for host parsing, so we can
- * no longer rely just on the source (rfc3195d forwarded messages arrive via
- * unix domain sockets but contain the hostname). rgerhards, 2005-10-06
- *
- * rgerhards, 2008-02-18:
- * This function was previously called "printchopped"() and has been renamed
- * as part of the effort to create a clean internal message submission interface.
- * It also has been adopted to our usual calling interface, but currently does
- * not provide any useful return states. But we now have the hook and things can
- * improve in the future. <-- TODO!
- *
- * rgerhards, 2008-03-19:
- * I added an additional calling parameter to permit specifying the flow
- * control capability of the source.
- *
- * rgerhards, 2008-05-16:
- * I added an additional calling parameter (hnameIP) to enable specifying the IP
- * of a remote host.
- *
- * rgerhards, 2008-09-11:
- * Interface change: added new parameter "InputName", permits the input to provide 
- * a string that identifies it. May be NULL, but must be a valid char* pointer if
- * non-NULL.
- *
- * rgerhards, 2008-10-06:
- * Interface change: added new parameter "stTime", which enables the caller to provide
- * a timestamp that is to be used as timegenerated instead of the current system time.
- * This is meant to facilitate performance optimization. Some inputs support such modes.
- * If stTime is NULL, the current system time is used.
- *
- * rgerhards, 2008-10-09:
- * interface change: bParseHostname removed, now in flags
- */
-rsRetVal
-parseAndSubmitMessage(uchar *hname, uchar *hnameIP, uchar *msg, int len, int flags, flowControl_t flowCtlType,
-	prop_t *pInputName, struct syslogTime *stTime, time_t ttGenTime)
-{
-	DEFiRet;
-	register int iMsg;
-	uchar *pMsg;
-	uchar *pData;
-	uchar *pEnd;
-	int iMaxLine;
-	uchar *tmpline = NULL;
-#	ifdef USE_NETZIP
-	uchar *deflateBuf = NULL;
-	uLongf iLenDefBuf;
-#	endif
-
-	assert(hname != NULL);
-	assert(hnameIP != NULL);
-	assert(msg != NULL);
-	assert(len >= 0);
-
-	/* we first allocate work buffers large enough to hold the configured maximum
-	 * size of a message. Over time, we should change this to a more optimal way, i.e.
-	 * by calling the function with the actual length of the message to be parsed.
-	 * rgerhards, 2008-09-02
-	 *
-	 * TODO: optimize buffer handling */
-	iMaxLine = glbl.GetMaxLine();
-	CHKmalloc(tmpline = malloc(sizeof(uchar) * (iMaxLine + 1)));
-
-	/* we first check if we have a NUL character at the very end of the
-	 * message. This seems to be a frequent problem with a number of senders.
-	 * So I have now decided to drop these NULs. However, if they are intentional,
-	 * that may cause us some problems, e.g. with syslog-sign. On the other hand,
-	 * current code always has problems with intentional NULs (as it needs to escape
-	 * them to prevent problems with the C string libraries), so that does not
-	 * really matter. Just to be on the save side, we'll log destruction of such
-	 * NULs in the debug log.
-	 * rgerhards, 2007-09-14
-	 */
-	if(*(msg + len - 1) == '\0') {
-		DBGPRINTF("dropped NUL at very end of message\n");
-		len--;
-	}
-
-	/* then we check if we need to drop trailing LFs, which often make
-	 * their way into syslog messages unintentionally. In order to remain
-	 * compatible to recent IETF developments, we allow the user to
-	 * turn on/off this handling.  rgerhards, 2007-07-23
-	 */
-	if(bDropTrailingLF && *(msg + len - 1) == '\n') {
-		DBGPRINTF("dropped LF at very end of message (DropTrailingLF is set)\n");
-		len--;
-	}
-
-	iMsg = 0;	/* initialize receiving buffer index */
-	pMsg = tmpline; /* set receiving buffer pointer */
-	pData = msg;	/* set source buffer pointer */
-	pEnd = msg + len; /* this is one off, which is intensional */
-
-#	ifdef USE_NETZIP
-	/* we first need to check if we have a compressed record. If so,
-	 * we must decompress it.
-	 */
-	if(len > 0 && *msg == 'z') { /* compressed data present? (do NOT change order if conditions!) */
-		/* we have compressed data, so let's deflate it. We support a maximum
-		 * message size of iMaxLine. If it is larger, an error message is logged
-		 * and the message is dropped. We do NOT try to decompress larger messages
-		 * as such might be used for denial of service. It might happen to later
-		 * builds that such functionality be added as an optional, operator-configurable
-		 * feature.
-		 */
-		int ret;
-		iLenDefBuf = iMaxLine;
-		CHKmalloc(deflateBuf = malloc(sizeof(uchar) * (iMaxLine + 1)));
-		ret = uncompress((uchar *) deflateBuf, &iLenDefBuf, (uchar *) msg+1, len-1);
-		DBGPRINTF("Compressed message uncompressed with status %d, length: new %ld, old %d.\n",
-		        ret, (long) iLenDefBuf, len-1);
-		/* Now check if the uncompression worked. If not, there is not much we can do. In
-		 * that case, we log an error message but ignore the message itself. Storing the
-		 * compressed text is dangerous, as it contains control characters. So we do
-		 * not do this. If someone would like to have a copy, this code here could be
-		 * modified to do a hex-dump of the buffer in question. We do not include
-		 * this functionality right now.
-		 * rgerhards, 2006-12-07
-		 */
-		if(ret != Z_OK) {
-			errmsg.LogError(0, NO_ERRCODE, "Uncompression of a message failed with return code %d "
-			            "- enable debug logging if you need further information. "
-				    "Message ignored.", ret);
-			FINALIZE; /* unconditional exit, nothing left to do... */
-		}
-		pData = deflateBuf;
-		pEnd = deflateBuf + iLenDefBuf;
-	}
-#	else /* ifdef USE_NETZIP */
-	/* in this case, we still need to check if the message is compressed. If so, we must
-	 * tell the user we can not accept it.
-	 */
-	if(len > 0 && *msg == 'z') {
-		errmsg.LogError(0, NO_ERRCODE, "Received a compressed message, but rsyslogd does not have compression "
-		         "support enabled. The message will be ignored.");
-		FINALIZE;
-	}	
-#	endif /* ifdef USE_NETZIP */
-
-	while(pData < pEnd) {
-		if(iMsg >= iMaxLine) {
-			/* emergency, we now need to flush, no matter if
-			 * we are at end of message or not...
-			 */
-			if(iMsg == iMaxLine) {
-				*(pMsg + iMsg) = '\0'; /* space *is* reserved for this! */
-				printline(hname, hnameIP, tmpline, flags, flowCtlType, pInputName, stTime, ttGenTime);
-			} else {
-				/* This case in theory never can happen. If it happens, we have
-				 * a logic error. I am checking for it, because if I would not,
-				 * we would address memory invalidly with the code above. I
-				 * do not care much about this case, just a debug log entry
-				 * (I couldn't do any more smart things anyway...).
-				 * rgerhards, 2007-9-20
-				 */
-				DBGPRINTF("internal error: iMsg > max msg size in parseAndSubmitMessage()\n");
-			}
-			FINALIZE; /* in this case, we are done... nothing left we can do */
-		}
-		if(*pData == '\0') { /* guard against \0 characters... */
-			/* changed to the sequence (somewhat) proposed in
-			 * draft-ietf-syslog-protocol-19. rgerhards, 2006-11-30
-			 */
-			if(iMsg + 3 < iMaxLine) { /* do we have space? */
-				*(pMsg + iMsg++) =  cCCEscapeChar;
-				*(pMsg + iMsg++) = '0';
-				*(pMsg + iMsg++) = '0';
-				*(pMsg + iMsg++) = '0';
-			} /* if we do not have space, we simply ignore the '\0'... */
-			  /* log an error? Very questionable... rgerhards, 2006-11-30 */
-			  /* decided: we do not log an error, it won't help... rger, 2007-06-21 */
-			++pData;
-		} else if(bEscapeCCOnRcv && iscntrl((int) *pData)) {
-			/* we are configured to escape control characters. Please note
-			 * that this most probably break non-western character sets like
-			 * Japanese, Korean or Chinese. rgerhards, 2007-07-17
-			 * Note: sysklogd logs octal values only for DEL and CCs above 127.
-			 * For others, it logs ^n where n is the control char converted to an
-			 * alphabet character. We like consistency and thus escape it to octal
-			 * in all cases. If someone complains, we may change the mode. At least
-			 * we known now what's going on.
-			 * rgerhards, 2007-07-17
-			 */
-			if(iMsg + 3 < iMaxLine) { /* do we have space? */
-				*(pMsg + iMsg++) = cCCEscapeChar;
-				*(pMsg + iMsg++) = '0' + ((*pData & 0300) >> 6);
-				*(pMsg + iMsg++) = '0' + ((*pData & 0070) >> 3);
-				*(pMsg + iMsg++) = '0' + ((*pData & 0007));
-			} /* again, if we do not have space, we ignore the char - see comment at '\0' */
-			++pData;
-		} else {
-			*(pMsg + iMsg++) = *pData++;
-		}
-	}
-
-	*(pMsg + iMsg) = '\0'; /* space *is* reserved for this! */
-
-	/* typically, we should end up here! */
-	printline(hname, hnameIP, tmpline, flags, flowCtlType, pInputName, stTime, ttGenTime);
-
-finalize_it:
-	if(tmpline != NULL)
-		free(tmpline);
-#	ifdef USE_NETZIP
-	if(deflateBuf != NULL)
-		free(deflateBuf);
-#	endif
 	RETiRet;
 }
 
@@ -862,13 +530,7 @@ submitErrMsg(int iErr, uchar *msg)
 
 
 /* rgerhards 2004-11-09: the following is a function that can be used
- * to log a message orginating from the syslogd itself. In sysklogd code,
- * this is done by simply calling logmsg(). However, logmsg() is changed in
- * rsyslog so that it takes a msg "object". So it can no longer be called
- * directly. This method here solves the need. It provides an interface that
- * allows to construct a locally-generated message. Please note that this
- * function here probably is only an interim solution and that we need to
- * think on the best way to do this.
+ * to log a message orginating from the syslogd itself.
  */
 rsRetVal
 logmsgInternal(int iErr, int pri, uchar *msg, int flags)
@@ -883,6 +545,7 @@ logmsgInternal(int iErr, int pri, uchar *msg, int flags)
 	MsgSetHOSTNAME(pMsg, glbl.GetLocalHostName(), ustrlen(glbl.GetLocalHostName()));
 	MsgSetRcvFrom(pMsg, glbl.GetLocalHostNameProp());
 	MsgSetRcvFromIP(pMsg, pLocalHostIP);
+	MsgSetMSGoffs(pMsg, 0);
 	/* check if we have an error code associated and, if so,
 	 * adjust the tag. -- rgerhards, 2008-06-27
 	 */
@@ -895,8 +558,8 @@ logmsgInternal(int iErr, int pri, uchar *msg, int flags)
 	}
 	pMsg->iFacility = LOG_FAC(pri);
 	pMsg->iSeverity = LOG_PRI(pri);
-	pMsg->bParseHOSTNAME = 0;
 	flags |= INTERNAL_MSG;
+	pMsg->msgFlags  = flags;
 
 	/* we now check if we should print internal messages out to stderr. This was
 	 * suggested by HKS as a way to help people troubleshoot rsyslog configuration
@@ -906,523 +569,201 @@ logmsgInternal(int iErr, int pri, uchar *msg, int flags)
 	 * permits us to process unmodified config files which otherwise contain a
 	 * supressor statement.
 	 */
-	if(((Debug || NoFork) && bErrMsgToStderr) || iConfigVerify) {
+	if(((Debug == DEBUG_FULL || NoFork) && bErrMsgToStderr) || iConfigVerify) {
 		if(LOG_PRI(pri) == LOG_ERR)
 			fprintf(stderr, "rsyslogd: %s\n", msg);
 	}
 
 	if(bHaveMainQueue == 0) { /* not yet in queued mode */
-		iminternalAddMsg(pri, pMsg, flags);
+		iminternalAddMsg(pMsg);
 	} else {
-		/* we have the queue, so we can simply provide the 
+               /* we have the queue, so we can simply provide the
 		 * message to the queue engine.
 		 */
-		logmsg(pMsg, flags);
+		submitMsg(pMsg);
 	}
 finalize_it:
 	RETiRet;
 }
 
-
-/* The consumer of dequeued messages. This function is called by the
- * queue engine on dequeueing of a message. It runs on a SEPARATE
- * THREAD.
- * Please note: the message object is destructed by the queue itself!
+/* check message against ACL set
+ * rgerhards, 2009-11-16
  */
-static rsRetVal
-msgConsumer(void __attribute__((unused)) *notNeeded, void *pUsr)
-{
-	DEFiRet;
-	msg_t *pMsg = (msg_t*) pUsr;
+#if 0
+static inline rsRetVal
+chkMsgAgainstACL() {
+	/* if we reach this point, we had a good receive and can process the packet received */
+	/* check if we have a different sender than before, if so, we need to query some new values */
+	if(net.CmpHost(&frominet, frominetPrev, socklen) != 0) {
+		CHKiRet(net.cvthname(&frominet, fromHost, fromHostFQDN, fromHostIP));
+		memcpy(frominetPrev, &frominet, socklen); /* update cache indicator */
+		/* Here we check if a host is permitted to send us
+		* syslog messages. If it isn't, we do not further
+		* process the message but log a warning (if we are
+		* configured to do this).
+		* rgerhards, 2005-09-26
+		*/
+		*pbIsPermitted = net.isAllowedSender((uchar*)"UDP",
+						    (struct sockaddr *)&frominet, (char*)fromHostFQDN);
 
-	assert(pMsg != NULL);
+		if(!*pbIsPermitted) {
+			DBGPRINTF("%s is not an allowed sender\n", (char*)fromHostFQDN);
+			if(glbl.GetOption_DisallowWarning) {
+				time_t tt;
 
-	if((pMsg->msgFlags & NEEDS_PARSING) != 0) {
-		parseMsg(pMsg);
+				datetime.GetTime(&tt);
+				if(tt > ttLastDiscard + 60) {
+					ttLastDiscard = tt;
+					errmsg.LogError(0, NO_ERRCODE,
+					"UDP message from disallowed sender %s discarded",
+					(char*)fromHost);
+				}
+			}
+		}
 	}
-	ruleset.ProcessMsg(pMsg);
-	msgDestruct(&pMsg);
+}
+#endif
 
+
+/* preprocess a batch of messages, that is ready them for actual processing. This is done
+ * as a first stage and totally in parallel to any other worker active in the system. So
+ * it helps us keep up the overall concurrency level.
+ * rgerhards, 2010-06-09
+ */
+static inline rsRetVal
+preprocessBatch(batch_t *pBatch) {
+	uchar fromHost[NI_MAXHOST];
+	uchar fromHostIP[NI_MAXHOST];
+	uchar fromHostFQDN[NI_MAXHOST];
+	prop_t *propFromHost = NULL;
+	prop_t *propFromHostIP = NULL;
+	int bSingleRuleset;
+	ruleset_t *batchRuleset; /* the ruleset used for all message inside the batch, if there is a single one */
+	int bIsPermitted;
+	msg_t *pMsg;
+	int i;
+	rsRetVal localRet;
+	DEFiRet;
+
+	bSingleRuleset = 1;
+	batchRuleset = (pBatch->nElem > 0) ? ((msg_t*) pBatch->pElem[0].pUsrp)->pRuleset : NULL;
+	
+	for(i = 0 ; i < pBatch->nElem  && !*(pBatch->pbShutdownImmediate) ; i++) {
+		pMsg = (msg_t*) pBatch->pElem[i].pUsrp;
+		if((pMsg->msgFlags & NEEDS_ACLCHK_U) != 0) {
+			DBGPRINTF("msgConsumer: UDP ACL must be checked for message (hostname-based)\n");
+			if(net.cvthname(pMsg->rcvFrom.pfrominet, fromHost, fromHostFQDN, fromHostIP) != RS_RET_OK)
+				continue;
+			bIsPermitted = net.isAllowedSender2((uchar*)"UDP",
+			    (struct sockaddr *)pMsg->rcvFrom.pfrominet, (char*)fromHostFQDN, 1);
+			if(!bIsPermitted) {
+				DBGPRINTF("Message from '%s' discarded, not a permitted sender host\n",
+					  fromHostFQDN);
+				pBatch->pElem[i].state = BATCH_STATE_DISC;
+			} else {
+				/* save some of the info we obtained */
+				MsgSetRcvFromStr(pMsg, fromHost, ustrlen(fromHost), &propFromHost);
+				CHKiRet(MsgSetRcvFromIPStr(pMsg, fromHostIP, ustrlen(fromHostIP), &propFromHostIP));
+				pMsg->msgFlags &= ~NEEDS_ACLCHK_U;
+			}
+		}
+		if((pMsg->msgFlags & NEEDS_PARSING) != 0) {
+			if((localRet = parser.ParseMsg(pMsg)) != RS_RET_OK)  {
+				DBGPRINTF("Message discarded, parsing error %d\n", localRet);
+				pBatch->pElem[i].state = BATCH_STATE_DISC;
+			}
+		}
+		if(pMsg->pRuleset != batchRuleset)
+			bSingleRuleset = 0;
+	}
+
+	batchSetSingleRuleset(pBatch, bSingleRuleset);
+
+finalize_it:
+	if(propFromHost != NULL)
+		prop.Destruct(&propFromHost);
+	if(propFromHostIP != NULL)
+		prop.Destruct(&propFromHostIP);
 	RETiRet;
 }
 
-
-/* Helper to parseRFCSyslogMsg. This function parses a field up to
- * (and including) the SP character after it. The field contents is
- * returned in a caller-provided buffer. The parsepointer is advanced
- * to after the terminating SP. The caller must ensure that the 
- * provided buffer is large enough to hold the to be extracted value.
- * Returns 0 if everything is fine or 1 if either the field is not
- * SP-terminated or any other error occurs. -- rger, 2005-11-24
- * The function now receives the size of the string and makes sure
- * that it does not process more than that. The *pLenStr counter is
- * updated on exit. -- rgerhards, 2009-09-23
+/* The consumer of dequeued messages. This function is called by the
+ * queue engine on dequeueing of a message. It runs on a SEPARATE
+ * THREAD. It receives an array of pointers, which it must iterate
+ * over. We do not do any further batching, as this is of no benefit
+ * for the main queue.
  */
-static int parseRFCField(uchar **pp2parse, uchar *pResult, int *pLenStr)
+static rsRetVal
+msgConsumer(void __attribute__((unused)) *notNeeded, batch_t *pBatch, int *pbShutdownImmediate)
 {
-	uchar *p2parse;
-	int iRet = 0;
-
-	assert(pp2parse != NULL);
-	assert(*pp2parse != NULL);
-	assert(pResult != NULL);
-
-	p2parse = *pp2parse;
-
-	/* this is the actual parsing loop */
-	while(*pLenStr > 0  && *p2parse != ' ') {
-		*pResult++ = *p2parse++;
-		--(*pLenStr);
+	DEFiRet;
+	assert(pBatch != NULL);
+	pBatch->pbShutdownImmediate = pbShutdownImmediate; /* TODO: move this to batch creation! */
+	preprocessBatch(pBatch);
+	ruleset.ProcessBatch(pBatch);
+//TODO: the BATCH_STATE_COMM must be set somewhere down the road, but we 
+//do not have this yet and so we emulate -- 2010-06-10
+int i;
+	for(i = 0 ; i < pBatch->nElem  && !*pbShutdownImmediate ; i++) {
+		pBatch->pElem[i].state = BATCH_STATE_COMM;
 	}
-
-	if(*pLenStr > 0 && *p2parse == ' ') {
-		++p2parse; /* eat SP, but only if not at end of string */
-		--(*pLenStr);
-	} else {
-		iRet = 1; /* there MUST be an SP! */
-	}
-	*pResult = '\0';
-
-	/* set the new parse pointer */
-	*pp2parse = p2parse;
-	return 0;
-}
-
-
-/* Helper to parseRFCSyslogMsg. This function parses the structured
- * data field of a message. It does NOT parse inside structured data,
- * just gets the field as whole. Parsing the single entities is left
- * to other functions. The parsepointer is advanced
- * to after the terminating SP. The caller must ensure that the 
- * provided buffer is large enough to hold the to be extracted value.
- * Returns 0 if everything is fine or 1 if either the field is not
- * SP-terminated or any other error occurs. -- rger, 2005-11-24
- * The function now receives the size of the string and makes sure
- * that it does not process more than that. The *pLenStr counter is
- * updated on exit. -- rgerhards, 2009-09-23
- */
-static int parseRFCStructuredData(uchar **pp2parse, uchar *pResult, int *pLenStr)
-{
-	uchar *p2parse;
-	int bCont = 1;
-	int iRet = 0;
-	int lenStr;
-
-	assert(pp2parse != NULL);
-	assert(*pp2parse != NULL);
-	assert(pResult != NULL);
-
-	p2parse = *pp2parse;
-	lenStr = *pLenStr;
-
-	/* this is the actual parsing loop
-	 * Remeber: structured data starts with [ and includes any characters
-	 * until the first ] followed by a SP. There may be spaces inside
-	 * structured data. There may also be \] inside the structured data, which
-	 * do NOT terminate an element.
-	 */
-	if(lenStr == 0 || *p2parse != '[')
-		return 1; /* this is NOT structured data! */
-
-	if(*p2parse == '-') { /* empty structured data? */
-		*pResult++ = '-';
-		++p2parse;
-		--lenStr;
-	} else {
-		while(bCont) {
-			if(lenStr < 2) {
-				/* we now need to check if we have only structured data */
-				if(lenStr > 0 && *p2parse == ']') {
-					*pResult++ = *p2parse;
-					p2parse++;
-					lenStr--;
-					bCont = 0;
-				} else {
-					iRet = 1; /* this is not valid! */
-					bCont = 0;
-				}
-			} else if(*p2parse == '\\' && *(p2parse+1) == ']') {
-				/* this is escaped, need to copy both */
-				*pResult++ = *p2parse++;
-				*pResult++ = *p2parse++;
-				lenStr -= 2;
-			} else if(*p2parse == ']' && *(p2parse+1) == ' ') {
-				/* found end, just need to copy the ] and eat the SP */
-				*pResult++ = *p2parse;
-				p2parse += 2;
-				lenStr -= 2;
-				bCont = 0;
-			} else {
-				*pResult++ = *p2parse++;
-				--lenStr;
-			}
-		}
-	}
-
-	if(lenStr > 0 && *p2parse == ' ') {
-		++p2parse; /* eat SP, but only if not at end of string */
-		--lenStr;
-	} else {
-		iRet = 1; /* there MUST be an SP! */
-	}
-	*pResult = '\0';
-
-	/* set the new parse pointer */
-	*pp2parse = p2parse;
-	*pLenStr = lenStr;
-	return 0;
-}
-
-/* parse a RFC5424-formatted syslog message. This function returns
- * 0 if processing of the message shall continue and 1 if something
- * went wrong and this messe should be ignored. This function has been
- * implemented in the effort to support syslog-protocol. Please note that
- * the name (parse *RFC*) stems from the hope that syslog-protocol will
- * some time become an RFC. Do not confuse this with informational
- * RFC 3164 (which is legacy syslog).
- *
- * currently supported format:
- *
- * <PRI>VERSION SP TIMESTAMP SP HOSTNAME SP APP-NAME SP PROCID SP MSGID SP [SD-ID]s SP MSG
- *
- * <PRI> is already stripped when this function is entered. VERSION already
- * has been confirmed to be "1", but has NOT been stripped from the message.
- *
- * rger, 2005-11-24
- */
-int parseRFCSyslogMsg(msg_t *pMsg, int flags)
-{
-	uchar *p2parse;
-	uchar *pBuf;
-	int lenMsg;
-	int bContParse = 1;
-
-	BEGINfunc
-	assert(pMsg != NULL);
-	assert(pMsg->pszRawMsg != NULL);
-	p2parse = pMsg->pszRawMsg + pMsg->offAfterPRI; /* point to start of text, after PRI */
-	lenMsg = pMsg->iLenRawMsg - pMsg->offAfterPRI;
-
-	/* do a sanity check on the version and eat it (the caller checked this already) */
-	assert(p2parse[0] == '1' && p2parse[1] == ' ');
-	p2parse += 2;
-	lenMsg -= 2;
-
-	/* Now get us some memory we can use as a work buffer while parsing.
-	 * We simply allocated a buffer sufficiently large to hold all of the
-	 * message, so we can not run into any troubles. I think this is
-	 * more wise then to use individual buffers.
-	 */
-	if((pBuf = malloc(sizeof(uchar) * (lenMsg + 1))) == NULL)
-		return 1;
-		
-	/* IMPORTANT NOTE:
-	 * Validation is not actually done below nor are any errors handled. I have
-	 * NOT included this for the current proof of concept. However, it is strongly
-	 * advisable to add it when this code actually goes into production.
-	 * rgerhards, 2005-11-24
-	 */
-
-	/* TIMESTAMP */
-	if(datetime.ParseTIMESTAMP3339(&(pMsg->tTIMESTAMP),  &p2parse, &lenMsg) == RS_RET_OK) {
-		if(flags & IGNDATE) {
-			/* we need to ignore the msg data, so simply copy over reception date */
-			memcpy(&pMsg->tTIMESTAMP, &pMsg->tRcvdAt, sizeof(struct syslogTime));
-		}
-	} else {
-		DBGPRINTF("no TIMESTAMP detected!\n");
-		bContParse = 0;
-	}
-
-	/* HOSTNAME */
-	if(bContParse) {
-		parseRFCField(&p2parse, pBuf, &lenMsg);
-		MsgSetHOSTNAME(pMsg, pBuf, ustrlen(pBuf));
-	}
-
-	/* APP-NAME */
-	if(bContParse) {
-		parseRFCField(&p2parse, pBuf, &lenMsg);
-		MsgSetAPPNAME(pMsg, (char*)pBuf);
-	}
-
-	/* PROCID */
-	if(bContParse) {
-		parseRFCField(&p2parse, pBuf, &lenMsg);
-		MsgSetPROCID(pMsg, (char*)pBuf);
-	}
-
-	/* MSGID */
-	if(bContParse) {
-		parseRFCField(&p2parse, pBuf, &lenMsg);
-		MsgSetMSGID(pMsg, (char*)pBuf);
-	}
-
-	/* STRUCTURED-DATA */
-	if(bContParse) {
-		parseRFCStructuredData(&p2parse, pBuf, &lenMsg);
-		MsgSetStructuredData(pMsg, (char*)pBuf);
-	}
-
-	/* MSG */
-	MsgSetMSGoffs(pMsg, p2parse - pMsg->pszRawMsg);
-
-	free(pBuf);
-	ENDfunc
-	return 0; /* all ok */
-}
-
-
-/* parse a legay-formatted syslog message. This function returns
- * 0 if processing of the message shall continue and 1 if something
- * went wrong and this messe should be ignored. This function has been
- * implemented in the effort to support syslog-protocol.
- * rger, 2005-11-24
- * As of 2006-01-10, I am removing the logic to continue parsing only
- * when a valid TIMESTAMP is detected. Validity of other fields already
- * is ignored. This is due to the fact that the parser has grown smarter
- * and is now more able to understand different dialects of the syslog
- * message format. I do not expect any bad side effects of this change,
- * but I thought I log it in this comment.
- * rgerhards, 2006-01-10
- */
-int parseLegacySyslogMsg(msg_t *pMsg, int flags)
-{
-	uchar *p2parse;
-	int lenMsg;
-	int bTAGCharDetected;
-	int i;	/* general index for parsing */
-	uchar bufParseTAG[CONF_TAG_MAXSIZE];
-	uchar bufParseHOSTNAME[CONF_HOSTNAME_MAXSIZE];
-	BEGINfunc
-
-	assert(pMsg != NULL);
-	assert(pMsg->pszRawMsg != NULL);
-	lenMsg = pMsg->iLenRawMsg - pMsg->offAfterPRI; /* note: offAfterPRI is already the number of PRI chars (do not add one!) */
-	p2parse = pMsg->pszRawMsg + pMsg->offAfterPRI; /* point to start of text, after PRI */
-
-	/* Check to see if msg contains a timestamp. We start by assuming
-	 * that the message timestamp is the time of reception (which we 
-	 * generated ourselfs and then try to actually find one inside the
-	 * message. There we go from high-to low precison and are done
-	 * when we find a matching one. -- rgerhards, 2008-09-16
-	 */
-	if(datetime.ParseTIMESTAMP3339(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
-		/* we are done - parse pointer is moved by ParseTIMESTAMP3339 */;
-	} else if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
-		/* we are done - parse pointer is moved by ParseTIMESTAMP3164 */;
-	} else if(*p2parse == ' ' && lenMsg > 1) { /* try to see if it is slighly malformed - HP procurve seems to do that sometimes */
-		++p2parse;	/* move over space */
-		--lenMsg;
-		if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
-			/* indeed, we got it! */
-			/* we are done - parse pointer is moved by ParseTIMESTAMP3164 */;
-		} else {/* parse pointer needs to be restored, as we moved it off-by-one
-			 * for this try.
-			 */
-			--p2parse;
-			++lenMsg;
-		}
-	}
-
-	if(flags & IGNDATE) {
-		/* we need to ignore the msg data, so simply copy over reception date */
-		memcpy(&pMsg->tTIMESTAMP, &pMsg->tRcvdAt, sizeof(struct syslogTime));
-	}
-
-	/* rgerhards, 2006-03-13: next, we parse the hostname and tag. But we 
-	 * do this only when the user has not forbidden this. I now introduce some
-	 * code that allows a user to configure rsyslogd to treat the rest of the
-	 * message as MSG part completely. In this case, the hostname will be the
-	 * machine that we received the message from and the tag will be empty. This
-	 * is meant to be an interim solution, but for now it is in the code.
-	 */
-	if(bParseHOSTNAMEandTAG && !(flags & INTERNAL_MSG)) {
-		/* parse HOSTNAME - but only if this is network-received!
-		 * rger, 2005-11-14: we still have a problem with BSD messages. These messages
-		 * do NOT include a host name. In most cases, this leads to the TAG to be treated
-		 * as hostname and the first word of the message as the TAG. Clearly, this is not
-		 * of advantage ;) I think I have now found a way to handle this situation: there
-		 * are certain characters which are frequently used in TAG (e.g. ':'), which are
-		 * *invalid* in host names. So while parsing the hostname, I check for these characters.
-		 * If I find them, I set a simple flag but continue. After parsing, I check the flag.
-		 * If it was set, then we most probably do not have a hostname but a TAG. Thus, I change
-		 * the fields. I think this logic shall work with any type of syslog message.
-		 * rgerhards, 2009-06-23: and I now have extended this logic to every character
-		 * that is not a valid hostname.
-		 */
-		bTAGCharDetected = 0;
-		if(lenMsg > 0 && flags & PARSE_HOSTNAME) {
-			i = 0;
-			while(i < lenMsg && (isalnum(p2parse[i]) || p2parse[i] == '.' || p2parse[i] == '.'
-				|| p2parse[i] == '_' || p2parse[i] == '-') && i < (CONF_HOSTNAME_MAXSIZE - 1)) {
-				bufParseHOSTNAME[i] = p2parse[i];
-				++i;
-			}
-
-			if(i == lenMsg) {
-				/* we have a message that is empty immediately after the hostname,
-				 * but the hostname thus is valid! -- rgerhards, 2010-02-22
-				 */
-				p2parse += i;
-				lenMsg -= i;
-				bufParseHOSTNAME[i] = '\0';
-				MsgSetHOSTNAME(pMsg, bufParseHOSTNAME, i);
-			} else if(i > 0 && p2parse[i] == ' ' && isalnum(p2parse[i-1])) {
-				/* we got a hostname! */
-				p2parse += i + 1; /* "eat" it (including SP delimiter) */
-				lenMsg -= i + 1;
-				bufParseHOSTNAME[i] = '\0';
-				MsgSetHOSTNAME(pMsg, bufParseHOSTNAME, i);
-			}
-		}
-
-		/* now parse TAG - that should be present in message from all sources.
-		 * This code is somewhat not compliant with RFC 3164. As of 3164,
-		 * the TAG field is ended by any non-alphanumeric character. In
-		 * practice, however, the TAG often contains dashes and other things,
-		 * which would end the TAG. So it is not desirable. As such, we only
-		 * accept colon and SP to be terminators. Even there is a slight difference:
-		 * a colon is PART of the TAG, while a SP is NOT part of the tag
-		 * (it is CONTENT). Starting 2008-04-04, we have removed the 32 character
-		 * size limit (from RFC3164) on the tag. This had bad effects on existing
-		 * envrionments, as sysklogd didn't obey it either (probably another bug
-		 * in RFC3164...). We now receive the full size, but will modify the
-		 * outputs so that only 32 characters max are used by default.
-		 */
-		i = 0;
-		while(lenMsg > 0 && *p2parse != ':' && *p2parse != ' ' && i < CONF_TAG_MAXSIZE) {
-			bufParseTAG[i++] = *p2parse++;
-			--lenMsg;
-		}
-		if(lenMsg > 0 && *p2parse == ':') {
-			++p2parse; 
-			--lenMsg;
-			bufParseTAG[i++] = ':';
-		}
-
-		/* no TAG can only be detected if the message immediatly ends, in which case an empty TAG
-		 * is considered OK. So we do not need to check for empty TAG. -- rgerhards, 2009-06-23
-		 */
-		bufParseTAG[i] = '\0';	/* terminate string */
-		MsgSetTAG(pMsg, bufParseTAG, i);
-	} else {/* we enter this code area when the user has instructed rsyslog NOT
-		 * to parse HOSTNAME and TAG - rgerhards, 2006-03-13
-		 */
-		if(!(flags & INTERNAL_MSG)) {
-			DBGPRINTF("HOSTNAME and TAG not parsed by user configuraton.\n");
-		}
-	}
-
-	/* The rest is the actual MSG */
-	MsgSetMSGoffs(pMsg, p2parse - pMsg->pszRawMsg);
-
-	ENDfunc
-	return 0; /* all ok */
+	RETiRet;
 }
 
 
 /* submit a message to the main message queue.   This is primarily
  * a hook to prevent the need for callers to know about the main message queue
- * (which may change in the future as we will probably have multiple rule
- * sets and thus queues...).
  * rgerhards, 2008-02-13
  */
 rsRetVal
 submitMsg(msg_t *pMsg)
 {
+	qqueue_t *pQueue;
+	ruleset_t *pRuleset;
 	DEFiRet;
 
 	ISOBJ_TYPE_assert(pMsg, msg);
-	
+
+	pRuleset = MsgGetRuleset(pMsg);
+
+	pQueue = (pRuleset == NULL) ? pMsgQueue : ruleset.GetRulesetQueue(pRuleset);
 	MsgPrepareEnqueue(pMsg);
-	qqueueEnqObj(pMsgQueue, pMsg->flowCtlType, (void*) pMsg);
+	qqueueEnqObj(pQueue, pMsg->flowCtlType, (void*) pMsg);
 
 	RETiRet;
 }
 
 
 /* submit multiple messages at once, very similar to submitMsg, just
- * for multi_submit_t.
+ * for multi_submit_t. All messages need to go into the SAME queue!
  * rgerhards, 2009-06-16
  */
 rsRetVal
 multiSubmitMsg(multi_submit_t *pMultiSub)
 {
 	int i;
+	qqueue_t *pQueue;
+	ruleset_t *pRuleset;
 	DEFiRet;
 	assert(pMultiSub != NULL);
+
+	if(pMultiSub->nElem == 0)
+		FINALIZE;
 
 	for(i = 0 ; i < pMultiSub->nElem ; ++i) {
 		MsgPrepareEnqueue(pMultiSub->ppMsgs[i]);
 	}
 
-	iRet = qqueueMultiEnqObj(pMsgQueue, pMultiSub);
+	pRuleset = MsgGetRuleset(pMultiSub->ppMsgs[0]);
+	pQueue = (pRuleset == NULL) ? pMsgQueue : ruleset.GetRulesetQueue(pRuleset);
+	iRet = pQueue->MultiEnq(pQueue, pMultiSub);
 	pMultiSub->nElem = 0;
 
+finalize_it:
 	RETiRet;
 }
 
 
-/* Log a message to the appropriate log files, users, etc. based on
- * the priority.
- * rgerhards 2004-11-08: actually, this also decodes all but the PRI part.
- * rgerhards 2004-11-09: ... but only, if syslogd could properly be initialized
- *			 if not, we use emergency logging to the console and in
- *                       this case, no further decoding happens.
- * changed to no longer receive a plain message but a msg object instead.
- * rgerhards-2004-11-16: OK, we are now up to another change... This method
- * actually needs to PARSE the message. How exactly this needs to happen depends on
- * a number of things. Most importantly, it depends on the source. For example,
- * locally received messages (SOURCE_UNIXAF) do NOT have a hostname in them. So
- * we need to treat them differntly form network-received messages which have.
- * Well, actually not all network-received message really have a hostname. We
- * can just hope they do, but we can not be sure. So this method tries to find
- * whatever can be found in the message and uses that... Obviously, there is some
- * potential for misinterpretation, which we simply can not solve under the
- * circumstances given.
- */
-void
-logmsg(msg_t *pMsg, int flags)
-{
-	char *msg;
-
-	BEGINfunc
-	assert(pMsg != NULL);
-	assert(pMsg->pszRawMsg != NULL);
-
-	msg = (char*) pMsg->pszRawMsg + pMsg->offAfterPRI;  /* point to start of text, after PRI */
-	DBGPRINTF("logmsg: flags %x, from '%s', msg %s\n", flags, getRcvFrom(pMsg), msg);
-
-	/* rger 2005-11-24 (happy thanksgiving!): we now need to check if we have
-	 * a traditional syslog message or one formatted according to syslog-protocol.
-	 * We need to apply different parsers depending on that. We use the
-	 * -protocol VERSION field for the detection.
-	 */
-	if(msg[0] == '1' && msg[1] == ' ') {
-		DBGPRINTF("Message has syslog-protocol format.\n");
-		setProtocolVersion(pMsg, 1);
-		if(parseRFCSyslogMsg(pMsg, flags) == 1) {
-			msgDestruct(&pMsg);
-			return;
-		}
-	} else { /* we have legacy syslog */
-		DBGPRINTF("Message has legacy syslog format.\n");
-		setProtocolVersion(pMsg, 0);
-		if(parseLegacySyslogMsg(pMsg, flags) == 1) {
-			msgDestruct(&pMsg);
-			return;
-		}
-	}
-
-	/* ---------------------- END PARSING ---------------- */
-	
-	/* now submit the message to the main queue - then we are done */
-	pMsg->msgFlags = flags;
-	MsgPrepareEnqueue(pMsg);
-	qqueueEnqObj(pMsgQueue, pMsg->flowCtlType, (void*) pMsg);
-	ENDfunc
-}
 
 
 static void
@@ -1448,14 +789,14 @@ DEFFUNC_llExecFunc(flushRptdMsgsActions)
 {
 	action_t *pAction = (action_t*) pData;
 	assert(pAction != NULL);
-	
+
 	BEGINfunc
 	LockObj(pAction);
 	/* TODO: time() performance: the call below could be moved to
 	 * the beginn of the llExec(). This makes it slightly less correct, but
 	 * in an acceptable way. -- rgerhards, 2008-09-16
 	 */
-	if (pAction->f_prevcount && time(NULL) >= REPEATTIME(pAction)) {
+	if (pAction->f_prevcount && datetime.GetTime(NULL) >= REPEATTIME(pAction)) {
 		DBGPRINTF("flush %s: repeated %d times, %d sec.\n",
 		    module.GetStateName(pAction->pMod), pAction->f_prevcount,
 		    repeatinterval[pAction->f_repeatcount]);
@@ -1484,7 +825,7 @@ static void debug_switch()
 	struct tm tp;
 	struct sigaction sigAct;
 
-	time(&tTime);
+	datetime.GetTime(&tTime);
 	localtime_r(&tTime, &tp);
 	if(debugging_on == 0) {
 		debugging_on = 1;
@@ -1503,7 +844,7 @@ static void debug_switch()
 		dbgprintf("\n");
 		debugging_on = 0;
 	}
-	
+
 	memset(&sigAct, 0, sizeof (sigAct));
 	sigemptyset(&sigAct.sa_mask);
 	sigAct.sa_handler = debug_switch;
@@ -1515,7 +856,7 @@ void legacyOptsEnq(uchar *line)
 {
 	legacyOptsLL_t *pNew;
 
-	pNew = malloc(sizeof(legacyOptsLL_t));
+	pNew = MALLOC(sizeof(legacyOptsLL_t));
 	if(line == NULL)
 		pNew->line = NULL;
 	else
@@ -1652,10 +993,11 @@ static void doDie(int sig)
 #	define MSG1 "DoDie called.\n"
 #	define MSG2 "DoDie called 5 times - unconditional exit\n"
 	static int iRetries = 0; /* debug aid */
-	if(Debug)
+	dbgprintf(MSG1);
+	if(Debug == DEBUG_FULL)
 		write(1, MSG1, sizeof(MSG1) - 1);
 	if(iRetries++ == 4) {
-		if(Debug)
+		if(Debug == DEBUG_FULL)
 			write(1, MSG2, sizeof(MSG2) - 1);
 		abort();
 	}
@@ -1690,7 +1032,7 @@ destructAllActions(void)
 
 
 /* die() is called when the program shall end. This typically only occurs
- * during sigterm or during the initialization. 
+ * during sigterm or during the initialization.
  * As die() is intended to shutdown rsyslogd, it is
  * safe to call exit() here. Just make sure that die() itself is not called
  * at inapropriate places. As a general rule of thumb, it is a bad idea to add
@@ -1718,10 +1060,11 @@ die(int sig)
 
 	/* close the inputs */
 	DBGPRINTF("Terminating input threads...\n");
+	glbl.SetGlobalInputTermination();
 	thrdTerminateAll();
 
 	/* and THEN send the termination log message (see long comment above) */
-	if (sig) {
+	if(sig && bLogStatusMsgs) {
 		(void) snprintf(buf, sizeof(buf) / sizeof(char),
 		 " [origin software=\"rsyslogd\" " "swVersion=\"" VERSION \
 		 "\" x-pid=\"%d\" x-info=\"http://www.rsyslog.com\"]" " exiting on signal %d.",
@@ -1729,7 +1072,7 @@ die(int sig)
 		errno = 0;
 		logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)buf, 0);
 	}
-	
+
 	/* drain queue (if configured so) and stop main queue worker thread pool */
 	DBGPRINTF("Terminating main queue...\n");
 	qqueueDestruct(&pMsgQueue);
@@ -1749,8 +1092,6 @@ die(int sig)
 	 * easier.
 	 */
 	tplDeleteAll();
-
-	remove_pid(PidFile);
 
 	/* de-init some modules */
 	modExitIminternal();
@@ -1773,16 +1114,6 @@ die(int sig)
 	/* terminate the remaining classes */
 	GlobalClassExit();
 
-	/* TODO: this would also be the right place to de-init the builtin output modules. We
-	 * do not currently do that, because the module interface does not allow for
-	 * it. This will come some time later (it's essential with loadable modules).
-	 * For the time being, this is a memory leak on exit, but as the process is
-	 * terminated, we do not really bother about it.
-	 * rgerhards, 2007-08-03
-	 * I have added some code now, but all that mod init/de-init should be moved to
-	 * init, so that modules are unloaded and reloaded on HUP to. Eventually it should go
-	 * into destructAllActions() - but that needs to be seen. -- rgerhards, 2007-08-09
-	 */
 	module.UnloadAndDestructAll(eMOD_LINK_ALL);
 
 	DBGPRINTF("Clean shutdown completed, bye\n");
@@ -1795,6 +1126,9 @@ die(int sig)
 	 */
 	freeAllDynMemForTermination();
 	/* NO CODE HERE - feeelAllDynMemForTermination() must be the last thing before exit()! */
+
+	remove_pid(PidFile);
+
 	exit(0); /* "good" exit, this is the terminator function for rsyslog [die()] */
 }
 
@@ -1842,6 +1176,9 @@ static rsRetVal setMaxFiles(void __attribute__((unused)) *pVal, int iFiles)
 				iFiles, errStr, (long) maxFiles.rlim_max);
 		ABORT_FINALIZE(RS_RET_ERR_RLIM_NOFILE);
 	}
+#ifdef USE_UNLIMITED_SELECT
+	glbl.SetFdSetSize(howmany(iFiles, __NFDBITS) * sizeof (fd_mask));
+#endif
 	DBGPRINTF("Max number of files set to %d [kernel max %ld].\n", iFiles, (long) maxFiles.rlim_max);
 
 finalize_it:
@@ -1859,7 +1196,7 @@ static rsRetVal setUmask(void __attribute__((unused)) *pVal, int iUmask)
 }
 
 
-/* drop to specified group 
+/* drop to specified group
  * if something goes wrong, the function never returns
  * Note that such an abort can cause damage to on-disk structures, so we should
  * re-design the "interface" in the long term. -- rgerhards, 2008-11-26
@@ -1887,7 +1224,7 @@ static void doDropPrivGid(int iGid)
 }
 
 
-/* drop to specified user 
+/* drop to specified user
  * if something goes wrong, the function never returns
  * Note that such an abort can cause damage to on-disk structures, so we should
  * re-design the "interface" in the long term. -- rgerhards, 2008-11-19
@@ -1998,6 +1335,11 @@ generateConfigDAG(uchar *pszDAGFile)
 
 	assert(pszDAGFile != NULL);
 	
+	logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)
+		"Configuration graph generation is unfortunately disabled "
+		"in the current code base.", 0);
+	ABORT_FINALIZE(RS_RET_FILENAME_INVALID);
+
 	if((fp = fopen((char*) pszDAGFile, "w")) == NULL) {
 		logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)
 			"configuraton graph output file could not be opened, none generated", 0);
@@ -2111,13 +1453,6 @@ static void dbgPrintInitInfo(void)
 	DBGPRINTF("Messages with malicious PTR DNS Records are %sdropped.\n",
 		  glbl.GetDropMalPTRMsgs() ? "" : "not ");
 
-	DBGPRINTF("Control characters are %sreplaced upon reception.\n",
-		  bEscapeCCOnRcv? "" : "not ");
-
-	if(bEscapeCCOnRcv)
-		DBGPRINTF("Control character escape sequence prefix is '%c'.\n",
-			cCCEscapeChar);
-
 	DBGPRINTF("Main queue size %d messages.\n", iMainMsgQueueSize);
 	DBGPRINTF("Main queue worker threads: %d, wThread shutdown: %d, Perists every %d updates.\n",
 		  iMainMsgQueueNumWorkers, iMainMsgQtoWrkShutdown, iMainMsgQPersistUpdCnt);
@@ -2130,7 +1465,7 @@ static void dbgPrintInitInfo(void)
 	/* TODO: add
 	iActionRetryCount = 0;
 	iActionRetryInterval = 30000;
-	static int iMainMsgQtoWrkMinMsgs = 100;	
+       static int iMainMsgQtoWrkMinMsgs = 100;
 	static int iMainMsgQbSaveOnShutdown = 1;
 	iMainMsgQueMaxDiskSpace = 0;
 	setQPROP(qqueueSetiMinMsgsPerWrkr, "$MainMsgQueueWorkerThreadMinimumMessages", 100);
@@ -2147,14 +1482,18 @@ static rsRetVal
 runInputModules(void)
 {
 	modInfo_t *pMod;
+	int bNeedsCancel;
 
 	BEGINfunc
 	/* loop through all modules and activate them (brr...) */
 	pMod = module.GetNxtType(NULL, eMOD_IN);
 	while(pMod != NULL) {
 		if(pMod->mod.im.bCanRun) {
+			DBGPRINTF("trying to start input module '%s'\n", pMod->pszName);
 			/* activate here */
-			thrdCreate(pMod->mod.im.runInput, pMod->mod.im.afterRun);
+			bNeedsCancel = (pMod->isCompatibleWithFeature(sFEATURENonCancelInputTermination) == RS_RET_OK) ?
+				       0 : 1;
+			thrdCreate(pMod->mod.im.runInput, pMod->mod.im.afterRun, bNeedsCancel);
 		}
 	pMod = module.GetNxtType(pMod, eMOD_IN);
 	}
@@ -2192,13 +1531,76 @@ startInputModules(void)
 }
 
 
-/* INIT -- Initialize syslogd from configuration table
- * init() is called at initial startup AND each time syslogd is HUPed
+/* create a main message queue, now also used for ruleset queues. This function
+ * needs to be moved to some other module, but it is considered acceptable for
+ * the time being (remember that we want to restructure config processing at large!).
+ * rgerhards, 2009-10-27
+ */
+rsRetVal createMainQueue(qqueue_t **ppQueue, uchar *pszQueueName)
+{
+	DEFiRet;
+
+	/* switch the message object to threaded operation, if necessary */
+	if(MainMsgQueType == QUEUETYPE_DIRECT || iMainMsgQueueNumWorkers > 1) {
+		MsgEnableThreadSafety();
+	}
+
+	/* create message queue */
+	CHKiRet_Hdlr(qqueueConstruct(ppQueue, MainMsgQueType, iMainMsgQueueNumWorkers, iMainMsgQueueSize, msgConsumer)) {
+		/* no queue is fatal, we need to give up in that case... */
+		errmsg.LogError(0, iRet, "could not create (ruleset) main message queue"); \
+	}
+	/* name our main queue object (it's not fatal if it fails...) */
+	obj.SetName((obj_t*) (*ppQueue), pszQueueName);
+
+	/* ... set some properties ... */
+#	define setQPROP(func, directive, data) \
+	CHKiRet_Hdlr(func(*ppQueue, data)) { \
+		errmsg.LogError(0, NO_ERRCODE, "Invalid " #directive ", error %d. Ignored, running with default setting", iRet); \
+	}
+#	define setQPROPstr(func, directive, data) \
+	CHKiRet_Hdlr(func(*ppQueue, data, (data == NULL)? 0 : strlen((char*) data))) { \
+		errmsg.LogError(0, NO_ERRCODE, "Invalid " #directive ", error %d. Ignored, running with default setting", iRet); \
+	}
+
+	setQPROP(qqueueSetMaxFileSize, "$MainMsgQueueFileSize", iMainMsgQueMaxFileSize);
+	setQPROP(qqueueSetsizeOnDiskMax, "$MainMsgQueueMaxDiskSpace", iMainMsgQueMaxDiskSpace);
+	setQPROP(qqueueSetiDeqBatchSize, "$MainMsgQueueDequeueBatchSize", iMainMsgQueDeqBatchSize);
+	setQPROPstr(qqueueSetFilePrefix, "$MainMsgQueueFileName", pszMainMsgQFName);
+	setQPROP(qqueueSetiPersistUpdCnt, "$MainMsgQueueCheckpointInterval", iMainMsgQPersistUpdCnt);
+	setQPROP(qqueueSetbSyncQueueFiles, "$MainMsgQueueSyncQueueFiles", bMainMsgQSyncQeueFiles);
+	setQPROP(qqueueSettoQShutdown, "$MainMsgQueueTimeoutShutdown", iMainMsgQtoQShutdown );
+	setQPROP(qqueueSettoActShutdown, "$MainMsgQueueTimeoutActionCompletion", iMainMsgQtoActShutdown);
+	setQPROP(qqueueSettoWrkShutdown, "$MainMsgQueueWorkerTimeoutThreadShutdown", iMainMsgQtoWrkShutdown);
+	setQPROP(qqueueSettoEnq, "$MainMsgQueueTimeoutEnqueue", iMainMsgQtoEnq);
+	setQPROP(qqueueSetiHighWtrMrk, "$MainMsgQueueHighWaterMark", iMainMsgQHighWtrMark);
+	setQPROP(qqueueSetiLowWtrMrk, "$MainMsgQueueLowWaterMark", iMainMsgQLowWtrMark);
+	setQPROP(qqueueSetiDiscardMrk, "$MainMsgQueueDiscardMark", iMainMsgQDiscardMark);
+	setQPROP(qqueueSetiDiscardSeverity, "$MainMsgQueueDiscardSeverity", iMainMsgQDiscardSeverity);
+	setQPROP(qqueueSetiMinMsgsPerWrkr, "$MainMsgQueueWorkerThreadMinimumMessages", iMainMsgQWrkMinMsgs);
+	setQPROP(qqueueSetbSaveOnShutdown, "$MainMsgQueueSaveOnShutdown", bMainMsgQSaveOnShutdown);
+	setQPROP(qqueueSetiDeqSlowdown, "$MainMsgQueueDequeueSlowdown", iMainMsgQDeqSlowdown);
+	setQPROP(qqueueSetiDeqtWinFromHr,  "$MainMsgQueueDequeueTimeBegin", iMainMsgQueueDeqtWinFromHr);
+	setQPROP(qqueueSetiDeqtWinToHr,    "$MainMsgQueueDequeueTimeEnd", iMainMsgQueueDeqtWinToHr);
+
+#	undef setQPROP
+#	undef setQPROPstr
+
+	/* ... and finally start the queue! */
+	CHKiRet_Hdlr(qqueueStart(*ppQueue)) {
+		/* no queue is fatal, we need to give up in that case... */
+		errmsg.LogError(0, iRet, "could not start (ruleset) main message queue"); \
+	}
+	RETiRet;
+}
+
+
+/* INIT -- Initialize syslogd
  * Note that if iConfigVerify is set, only the config file is verified but nothing
  * else happens. -- rgerhards, 2008-07-28
  */
 static rsRetVal
-init()
+init(void)
 {
 	rsRetVal localRet;
 	int iNbrActions;
@@ -2209,45 +1611,7 @@ init()
 	struct sigaction sigAct;
 	DEFiRet;
 
-	thrdTerminateAll(); /* stop all running input threads - TODO: reconsider location! */
-
-	/* initialize some static variables */
-	pDfltHostnameCmp = NULL;
-	pDfltProgNameCmp = NULL;
-	eDfltHostnameCmpMode = HN_NO_COMP;
-
 	DBGPRINTF("rsyslog %s - called init()\n", VERSION);
-
-	/* delete the message queue, which also flushes all messages left over */
-	if(pMsgQueue != NULL) {
-		DBGPRINTF("deleting main message queue\n");
-		qqueueDestruct(&pMsgQueue); /* delete pThis here! */
-		pMsgQueue = NULL;
-	}
-
-	/*  Close all open log files and free log descriptor array. This also frees
-	 *  all output-modules instance data.
-	 */
-	destructAllActions();
-
-	/* Unload all non-static modules */
-	DBGPRINTF("Unloading non-static modules.\n");
-	module.UnloadAndDestructAll(eMOD_LINK_DYNAMIC_LOADED);
-
-	DBGPRINTF("Clearing templates.\n");
-	tplDeleteNew();
-
-	/* re-setting values to defaults (where applicable) */
-	/* once we have loadable modules, we must re-visit this code. The reason is
-	 * that config variables are not re-set, because the module is not yet loaded. On
-	 * the other hand, that doesn't matter, because the module got unloaded and is then
-	 * re-loaded, so the variables should be re-set via that way. And this is exactly how
-	 * it works. Loadable module's variables are initialized on load, the rest here.
-	 * rgerhards, 2008-04-28
-	 */
-	conf.cfsysline((uchar*)"ResetConfigVariables");
-
-	conf.ReInitConf();
 
 	/* construct the default ruleset */
 	ruleset.Construct(&pRuleset);
@@ -2296,17 +1660,6 @@ init()
 
 	legacyOptsHook();
 
-	/* we are now done with reading the configuration. This is the right time to
-	 * free some objects that were just needed for loading it. rgerhards 2005-10-19
-	 */
-	if(pDfltHostnameCmp != NULL) {
-		rsCStrDestruct(&pDfltHostnameCmp);
-	}
-
-	if(pDfltProgNameCmp != NULL) {
-		rsCStrDestruct(&pDfltProgNameCmp);
-	}
-
 	/* some checks */
 	if(iMainMsgQueueNumWorkers < 1) {
 		errmsg.LogError(0, NO_ERRCODE, "$MainMsgQueueNumWorkers must be at least 1! Set to 1.\n");
@@ -2342,56 +1695,18 @@ init()
 		ABORT_FINALIZE(RS_RET_VALIDATION_RUN);
 	}
 
-	/* switch the message object to threaded operation, if necessary */
-	if(MainMsgQueType == QUEUETYPE_DIRECT || iMainMsgQueueNumWorkers > 1) {
-		MsgEnableThreadSafety();
+	if(bAbortOnUncleanConfig && bHadConfigErr) {
+		fprintf(stderr, "rsyslogd: $AbortOnUncleanConfig is set, and config is not clean.\n"
+		                "Check error log for details, fix errors and restart. As a last\n"
+				"resort, you may want to remove $AbortOnUncleanConfig to permit a\n"
+				"startup with a dirty config.\n");
+		exit(2);
 	}
 
 	/* create message queue */
-	CHKiRet_Hdlr(qqueueConstruct(&pMsgQueue, MainMsgQueType, iMainMsgQueueNumWorkers, iMainMsgQueueSize, msgConsumer)) {
+	CHKiRet_Hdlr(createMainQueue(&pMsgQueue, UCHAR_CONSTANT("main Q"))) {
 		/* no queue is fatal, we need to give up in that case... */
 		fprintf(stderr, "fatal error %d: could not create message queue - rsyslogd can not run!\n", iRet);
-		exit(1);
-	}
-	/* name our main queue object (it's not fatal if it fails...) */
-	obj.SetName((obj_t*) pMsgQueue, (uchar*) "main Q");
-
-	/* ... set some properties ... */
-#	define setQPROP(func, directive, data) \
-	CHKiRet_Hdlr(func(pMsgQueue, data)) { \
-		errmsg.LogError(0, NO_ERRCODE, "Invalid " #directive ", error %d. Ignored, running with default setting", iRet); \
-	}
-#	define setQPROPstr(func, directive, data) \
-	CHKiRet_Hdlr(func(pMsgQueue, data, (data == NULL)? 0 : strlen((char*) data))) { \
-		errmsg.LogError(0, NO_ERRCODE, "Invalid " #directive ", error %d. Ignored, running with default setting", iRet); \
-	}
-
-	setQPROP(qqueueSetMaxFileSize, "$MainMsgQueueFileSize", iMainMsgQueMaxFileSize);
-	setQPROP(qqueueSetsizeOnDiskMax, "$MainMsgQueueMaxDiskSpace", iMainMsgQueMaxDiskSpace);
-	setQPROPstr(qqueueSetFilePrefix, "$MainMsgQueueFileName", pszMainMsgQFName);
-	setQPROP(qqueueSetiPersistUpdCnt, "$MainMsgQueueCheckpointInterval", iMainMsgQPersistUpdCnt);
-	setQPROP(qqueueSetbSyncQueueFiles, "$MainMsgQueueSyncQueueFiles", bMainMsgQSyncQeueFiles);
-	setQPROP(qqueueSettoQShutdown, "$MainMsgQueueTimeoutShutdown", iMainMsgQtoQShutdown );
-	setQPROP(qqueueSettoActShutdown, "$MainMsgQueueTimeoutActionCompletion", iMainMsgQtoActShutdown);
-	setQPROP(qqueueSettoWrkShutdown, "$MainMsgQueueWorkerTimeoutThreadShutdown", iMainMsgQtoWrkShutdown);
-	setQPROP(qqueueSettoEnq, "$MainMsgQueueTimeoutEnqueue", iMainMsgQtoEnq);
-	setQPROP(qqueueSetiHighWtrMrk, "$MainMsgQueueHighWaterMark", iMainMsgQHighWtrMark);
-	setQPROP(qqueueSetiLowWtrMrk, "$MainMsgQueueLowWaterMark", iMainMsgQLowWtrMark);
-	setQPROP(qqueueSetiDiscardMrk, "$MainMsgQueueDiscardMark", iMainMsgQDiscardMark);
-	setQPROP(qqueueSetiDiscardSeverity, "$MainMsgQueueDiscardSeverity", iMainMsgQDiscardSeverity);
-	setQPROP(qqueueSetiMinMsgsPerWrkr, "$MainMsgQueueWorkerThreadMinimumMessages", iMainMsgQWrkMinMsgs);
-	setQPROP(qqueueSetbSaveOnShutdown, "$MainMsgQueueSaveOnShutdown", bMainMsgQSaveOnShutdown);
-	setQPROP(qqueueSetiDeqSlowdown, "$MainMsgQueueDequeueSlowdown", iMainMsgQDeqSlowdown);
-	setQPROP(qqueueSetiDeqtWinFromHr,  "$MainMsgQueueDequeueTimeBegin", iMainMsgQueueDeqtWinFromHr);
-	setQPROP(qqueueSetiDeqtWinToHr,    "$MainMsgQueueDequeueTimeEnd", iMainMsgQueueDeqtWinToHr);
-
-#	undef setQPROP
-#	undef setQPROPstr
-
-	/* ... and finally start the queue! */
-	CHKiRet_Hdlr(qqueueStart(pMsgQueue)) {
-		/* no queue is fatal, we need to give up in that case... */
-		fprintf(stderr, "fatal error %d: could not start message queue - rsyslogd can not run!\n", iRet);
 		exit(1);
 	}
 
@@ -2412,21 +1727,23 @@ init()
 		dbgPrintInitInfo();
 	}
 
-	/* we now generate the startup message. It now includes everything to
-	 * identify this instance. -- rgerhards, 2005-08-17
-	 */
-	snprintf(bufStartUpMsg, sizeof(bufStartUpMsg)/sizeof(char), 
-		 " [origin software=\"rsyslogd\" " "swVersion=\"" VERSION \
-		 "\" x-pid=\"%d\" x-info=\"http://www.rsyslog.com\"] (re)start",
-		 (int) myPid);
-	logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)bufStartUpMsg, 0);
-
 	memset(&sigAct, 0, sizeof (sigAct));
 	sigemptyset(&sigAct.sa_mask);
 	sigAct.sa_handler = sighup_handler;
 	sigaction(SIGHUP, &sigAct, NULL);
 
-	DBGPRINTF(" (re)started.\n");
+	DBGPRINTF(" started.\n");
+
+	/* we now generate the startup message. It now includes everything to
+	 * identify this instance. -- rgerhards, 2005-08-17
+	 */
+	if(bLogStatusMsgs) {
+               snprintf(bufStartUpMsg, sizeof(bufStartUpMsg)/sizeof(char),
+			 " [origin software=\"rsyslogd\" " "swVersion=\"" VERSION \
+			 "\" x-pid=\"%d\" x-info=\"http://www.rsyslog.com\"] start",
+			 (int) myPid);
+		logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)bufStartUpMsg, 0);
+	}
 
 finalize_it:
 	RETiRet;
@@ -2446,6 +1763,25 @@ setDefaultRuleset(void __attribute__((unused)) *pVal, uchar *pszName)
 
 finalize_it:
 	free(pszName); /* no longer needed */
+	RETiRet;
+}
+
+
+
+/* Put the rsyslog main thread to sleep for n seconds. This was introduced as
+ * a quick and dirty workaround for a privilege drop race in regard to listener
+ * startup, which itself was a result of the not-yet-done proper coding of
+ * privilege drop code (quite some effort). It may be useful for other occasions, too.
+ * is specified).
+ * rgerhards, 2009-06-12
+ */
+static rsRetVal
+putToSleep(void __attribute__((unused)) *pVal, int iNewVal)
+{
+	DEFiRet;
+	DBGPRINTF("rsyslog main thread put to sleep via $sleep %d directive...\n", iNewVal);
+	srSleep(iNewVal, 0);
+	DBGPRINTF("rsyslog main thread continues after $sleep %d\n", iNewVal);
 	RETiRet;
 }
 
@@ -2517,7 +1853,7 @@ static rsRetVal setMainMsgQueType(void __attribute__((unused)) *pVal, uchar *psz
 void sighup_handler()
 {
 	struct sigaction sigAct;
-	
+
 	bHadHUP = 1;
 
 	memset(&sigAct, 0, sizeof (sigAct));
@@ -2526,6 +1862,9 @@ void sighup_handler()
 	sigaction(SIGHUP, &sigAct, NULL);
 }
 
+void sigttin_handler()
+{
+}
 
 /* this function pulls all internal messages from the buffer
  * and puts them into the processing engine.
@@ -2533,14 +1872,12 @@ void sighup_handler()
  * really help us. TODO: add error messages?
  * rgerhards, 2007-08-03
  */
-static void processImInternal(void)
+static inline void processImInternal(void)
 {
-	int iPri;
-	int iFlags;
 	msg_t *pMsg;
 
-	while(iminternalRemoveMsg(&iPri, &pMsg, &iFlags) == RS_RET_OK) {
-		logmsg(pMsg, iFlags);
+	while(iminternalRemoveMsg(&pMsg) == RS_RET_OK) {
+		submitMsg(pMsg);
 	}
 }
 
@@ -2562,27 +1899,28 @@ DEFFUNC_llExecFunc(doHUPActions)
  * is *NOT* the sighup handler. The signal is recorded by the handler, that record
  * detected inside the mainloop and then this function is called to do the
  * real work. -- rgerhards, 2008-10-22
+ * Note: there is a VERY slim chance of a data race when the hostname is reset.
+ * We prefer to take this risk rather than sync all accesses, because to the best
+ * of my analysis it can not really hurt (the actual property is reference-counted)
+ * but the sync would require some extra CPU for *each* message processed.
+ * rgerhards, 2012-04-11
  */
 static inline void
 doHUP(void)
 {
 	char buf[512];
 
-	snprintf(buf, sizeof(buf) / sizeof(char),
-		 " [origin software=\"rsyslogd\" " "swVersion=\"" VERSION
-		 "\" x-pid=\"%d\" x-info=\"http://www.rsyslog.com\"] rsyslogd was HUPed, type '%s'.",
-		 (int) myPid, glbl.GetHUPisRestart() ? "restart" : "lightweight");
-		errno = 0;
-	logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)buf, 0);
-
-	if(glbl.GetHUPisRestart()) {
-		DBGPRINTF("Received SIGHUP, configured to be restart, reloading rsyslogd.\n");
-		init(); /* main queue is stopped as part of init() */
-		runInputModules();
-	} else {
-		DBGPRINTF("Received SIGHUP, configured to be a non-restart type of HUP - notifying actions.\n");
-		ruleset.IterateAllActions(doHUPActions, NULL);
+	if(bLogStatusMsgs) {
+		snprintf(buf, sizeof(buf) / sizeof(char),
+			 " [origin software=\"rsyslogd\" " "swVersion=\"" VERSION
+			 "\" x-pid=\"%d\" x-info=\"http://www.rsyslog.com\"] rsyslogd was HUPed",
+			 (int) myPid);
+			errno = 0;
+		logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)buf, 0);
 	}
+
+	queryLocalHostname(); /* re-read our name */
+	ruleset.IterateAllActions(doHUPActions, NULL);
 }
 
 
@@ -2690,6 +2028,20 @@ static rsRetVal loadBuildInModules(void)
 	 */
 	CHKiRet(module.doModInit(modInitUsrMsg, (uchar*) "builtin-usrmsg", NULL));
 
+	/* load build-in parser modules */
+	CHKiRet(module.doModInit(modInitpmrfc5424, UCHAR_CONSTANT("builtin-pmrfc5424"), NULL));
+	CHKiRet(module.doModInit(modInitpmrfc3164, UCHAR_CONSTANT("builtin-pmrfc3164"), NULL));
+
+	/* and set default parser modules (order is *very* important, legacy (3164) parse needs to go last! */
+	CHKiRet(parser.AddDfltParser(UCHAR_CONSTANT("rsyslog.rfc5424")));
+	CHKiRet(parser.AddDfltParser(UCHAR_CONSTANT("rsyslog.rfc3164")));
+
+	/* load build-in strgen modules */
+	CHKiRet(module.doModInit(modInitsmfile, UCHAR_CONSTANT("builtin-smfile"), NULL));
+	CHKiRet(module.doModInit(modInitsmtradfile, UCHAR_CONSTANT("builtin-smtradfile"), NULL));
+	CHKiRet(module.doModInit(modInitsmfwd, UCHAR_CONSTANT("builtin-smfwd"), NULL));
+	CHKiRet(module.doModInit(modInitsmtradfwd, UCHAR_CONSTANT("builtin-smtradfwd"), NULL));
+
 	/* ok, initialization of the command handler probably does not 100% belong right in
 	 * this space here. However, with the current design, this is actually quite a good
 	 * place to put it. We might decide to shuffle it around later, but for the time
@@ -2697,9 +2049,11 @@ static rsRetVal loadBuildInModules(void)
 	 * is that rsyslog will terminate if we can not register our built-in config commands.
 	 * This, I think, is the right thing to do. -- rgerhards, 2007-07-31
 	 */
+	CHKiRet(regCfSysLineHdlr((uchar *)"logrsyslogstatusmessages", 0, eCmdHdlrBinary, NULL, &bLogStatusMsgs, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"actionresumeretrycount", 0, eCmdHdlrInt, NULL, &glbliActionResumeRetryCount, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"defaultruleset", 0, eCmdHdlrGetWord, setDefaultRuleset, NULL, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"ruleset", 0, eCmdHdlrGetWord, setCurrRuleset, NULL, NULL));
+	CHKiRet(regCfSysLineHdlr((uchar *)"sleep", 0, eCmdHdlrInt, putToSleep, NULL, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuefilename", 0, eCmdHdlrGetWord, NULL, &pszMainMsgQFName, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuesize", 0, eCmdHdlrInt, NULL, &iMainMsgQueueSize, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuehighwatermark", 0, eCmdHdlrInt, NULL, &iMainMsgQHighWtrMark, NULL));
@@ -2717,17 +2071,15 @@ static rsRetVal loadBuildInModules(void)
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuedequeueslowdown", 0, eCmdHdlrInt, NULL, &iMainMsgQDeqSlowdown, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueueworkerthreadminimummessages", 0, eCmdHdlrInt, NULL, &iMainMsgQWrkMinMsgs, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuemaxfilesize", 0, eCmdHdlrSize, NULL, &iMainMsgQueMaxFileSize, NULL));
+	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuedequeuebatchsize", 0, eCmdHdlrSize, NULL, &iMainMsgQueDeqBatchSize, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuemaxdiskspace", 0, eCmdHdlrSize, NULL, &iMainMsgQueMaxDiskSpace, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuesaveonshutdown", 0, eCmdHdlrBinary, NULL, &bMainMsgQSaveOnShutdown, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuedequeuetimebegin", 0, eCmdHdlrInt, NULL, &iMainMsgQueueDeqtWinFromHr, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"mainmsgqueuedequeuetimeend", 0, eCmdHdlrInt, NULL, &iMainMsgQueueDeqtWinToHr, NULL));
+	CHKiRet(regCfSysLineHdlr((uchar *)"abortonuncleanconfig", 0, eCmdHdlrBinary, NULL, &bAbortOnUncleanConfig, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"repeatedmsgreduction", 0, eCmdHdlrBinary, NULL, &bReduceRepeatMsgs, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"actionexeconlywhenpreviousissuspended", 0, eCmdHdlrBinary, NULL, &bActExecWhenPrevSusp, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"actionexeconlyonceeveryinterval", 0, eCmdHdlrInt, NULL, &iActExecOnceInterval, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"actionresumeinterval", 0, eCmdHdlrInt, setActionResumeInterval, NULL, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"controlcharacterescapeprefix", 0, eCmdHdlrGetChar, NULL, &cCCEscapeChar, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"escapecontrolcharactersonreceive", 0, eCmdHdlrBinary, NULL, &bEscapeCCOnRcv, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"droptrailinglfonreception", 0, eCmdHdlrBinary, NULL, &bDropTrailingLF, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"template", 0, eCmdHdlrCustomHandler, conf.doNameLine, (void*)DIR_TEMPLATE, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"outchannel", 0, eCmdHdlrCustomHandler, conf.doNameLine, (void*)DIR_OUTCHANNEL, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"allowedsender", 0, eCmdHdlrCustomHandler, conf.doNameLine, (void*)DIR_ALLOWEDSENDER, NULL));
@@ -2748,11 +2100,6 @@ static rsRetVal loadBuildInModules(void)
 	CHKiRet(regCfSysLineHdlr((uchar *)"privdroptouserid", 0, eCmdHdlrInt, NULL, &uidDropPriv, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"privdroptogroup", 0, eCmdHdlrGID, NULL, &gidDropPriv, NULL));
 	CHKiRet(regCfSysLineHdlr((uchar *)"privdroptogroupid", 0, eCmdHdlrGID, NULL, &gidDropPriv, NULL));
-
-	/* now add other modules handlers (we should work on that to be able to do it in ClassInit(), but so far
-	 * that is not possible). -- rgerhards, 2008-01-28
-	 */
-	CHKiRet(actionAddCfSysLineHdrl());
 
 finalize_it:
 	RETiRet;
@@ -2775,11 +2122,6 @@ static void printVersion(void)
 #else
 	printf("\tFEATURE_LARGEFILE:\t\t\tNo\n");
 #endif
-#ifdef	USE_NETZIP
-	printf("\tFEATURE_NETZIP (message compression):\tYes\n");
-#else
-	printf("\tFEATURE_NETZIP (message compression):\tNo\n");
-#endif
 #if defined(SYSLOG_INET) && defined(USE_GSSAPI)
 	printf("\tGSSAPI Kerberos 5 support:\t\tYes\n");
 #else
@@ -2791,9 +2133,14 @@ static void printVersion(void)
 	printf("\tFEATURE_DEBUG (debug build, slow code):\tNo\n");
 #endif
 #ifdef	HAVE_ATOMIC_BUILTINS
-	printf("\tAtomic operations supported:\t\tYes\n");
+	printf("\t32bit Atomic operations supported:\tYes\n");
 #else
-	printf("\tAtomic operations supported:\t\tNo\n");
+	printf("\t32bit Atomic operations supported:\tNo\n");
+#endif
+#ifdef	HAVE_ATOMIC_BUILTINS_64BIT
+	printf("\t64bit Atomic operations supported:\tYes\n");
+#else
+	printf("\t64bit Atomic operations supported:\tNo\n");
 #endif
 #ifdef	RTINST
 	printf("\tRuntime Instrumentation (slow code):\tYes\n");
@@ -2812,10 +2159,6 @@ static rsRetVal mainThread()
 {
 	DEFiRet;
 	uchar *pTmp;
-
-	/* Note: signals MUST be processed by the thread this code is running in. The reason
-	 * is that we need to interrupt the select() system call. -- rgerhards, 2007-10-17
-	 */
 
 	/* initialize the build-in templates */
 	pTmp = template_DebugFormat;
@@ -2837,7 +2180,9 @@ static rsRetVal mainThread()
 	pTmp = template_StdDBFmt;
 	tplAddLine(" StdDBFmt", &pTmp);
         pTmp = template_StdPgSQLFmt;
-        tplLastStaticInit(tplAddLine(" StdPgSQLFmt", &pTmp));
+        tplAddLine(" StdPgSQLFmt", &pTmp);
+        pTmp = template_spoofadr;
+        tplLastStaticInit(tplAddLine("RSYSLOG_omudpspoofDfltSourceTpl", &pTmp));
 
 	CHKiRet(init());
 
@@ -2860,20 +2205,16 @@ static rsRetVal mainThread()
 	 */
 	if(gidDropPriv != 0) {
 		doDropPrivGid(gidDropPriv);
-		glbl.SetHUPisRestart(0); /* we can not do restart-type HUPs with dropped privs */
 	}
 
 	if(uidDropPriv != 0) {
 		doDropPrivUid(uidDropPriv);
-		glbl.SetHUPisRestart(0); /* we can not do restart-type HUPs with dropped privs */
 	}
 
 	/* finally let the inputs run... */
 	runInputModules();
 
 	/* END OF INTIALIZATION
-	 * ... but keep in mind that we might do a restart and thus init() might
-	 * be called again. -- rgerhards, 2005-10-24
 	 */
 	DBGPRINTF("initialization completed, transitioning to regular run mode\n");
 
@@ -2884,7 +2225,7 @@ static rsRetVal mainThread()
 	 * is still in its infancy (and not really done), we currently accept this issue.
 	 * rgerhards, 2009-06-29
 	 */
-	if(!(Debug || NoFork)) {
+	if(!(Debug == DEBUG_FULL || NoFork)) {
 		close(1);
 		close(2);
 		bErrMsgToStderr = 0;
@@ -2931,14 +2272,14 @@ InitGlobalClasses(void)
 	CHKiRet(objUse(conf,     CORE_COMPONENT));
 	pErrObj = "prop";
 	CHKiRet(objUse(prop,     CORE_COMPONENT));
+	pErrObj = "parser";
+	CHKiRet(objUse(parser,     CORE_COMPONENT));
 
 	/* intialize some dummy classes that are not part of the runtime */
 	pErrObj = "action";
 	CHKiRet(actionClassInit());
 	pErrObj = "template";
 	CHKiRet(templateInit());
-	pErrObj = "parser";
-	CHKiRet(parserClassInit());
 
 	/* TODO: the dependency on net shall go away! -- rgerhards, 2008-03-07 */
 	pErrObj = "net";
@@ -2977,6 +2318,7 @@ GlobalClassExit(void)
 	objRelease(rule,     CORE_COMPONENT);
 	objRelease(expr,     CORE_COMPONENT);
 	vmClassExit();					/* this is hack, currently core_modules do not get this automatically called */
+	parserClassExit();					/* this is hack, currently core_modules do not get this automatically called */
 	objRelease(datetime, CORE_COMPONENT);
 
 	/* TODO: implement the rest of the deinit */
@@ -2991,6 +2333,93 @@ GlobalClassExit(void)
 #endif
 	rsrtExit(); /* *THIS* *MUST/SHOULD?* always be the first class initilizer being called (except debug)! */
 
+	RETiRet;
+}
+
+
+/* query our host and domain names - we need to do this early as we may emit
+ * rgerhards, 2012-04-11
+ */
+static rsRetVal
+queryLocalHostname(void)
+{
+	uchar *LocalHostName;
+	uchar *LocalDomain;
+	uchar *LocalFQDNName;
+	uchar *p;
+	struct hostent *hent;
+	DEFiRet;
+
+	net.getLocalHostname(&LocalFQDNName);
+	CHKmalloc(LocalHostName = (uchar*) strdup((char*)LocalFQDNName));
+	glbl.SetLocalFQDNName(LocalFQDNName); /* set the FQDN before we modify it */
+	if((p = (uchar*)strchr((char*)LocalHostName, '.'))) {
+		*p++ = '\0';
+		LocalDomain = p;
+	} else {
+		LocalDomain = (uchar*)"";
+
+		/* It's not clearly defined whether gethostname()
+		 * should return the simple hostname or the fqdn. A
+		 * good piece of software should be aware of both and
+		 * we want to distribute good software.  Joey
+		 *
+		 * Good software also always checks its return values...
+		 * If syslogd starts up before DNS is up & /etc/hosts
+		 * doesn't have LocalHostName listed, gethostbyname will
+                * return NULL.
+		 */
+		/* TODO: gethostbyname() is not thread-safe, but replacing it is
+		 * not urgent as we do not run on multiple threads here. rgerhards, 2007-09-25
+		 */
+		hent = gethostbyname((char*)LocalHostName);
+		if(hent) {
+			int i = 0;
+
+			if(hent->h_aliases) {
+				size_t hnlen;
+
+				hnlen = strlen((char *) LocalHostName);
+
+				for (i = 0; hent->h_aliases[i]; i++) {
+					if (!strncmp(hent->h_aliases[i], (char *) LocalHostName, hnlen)
+					    && hent->h_aliases[i][hnlen] == '.') {
+						/* found a matching hostname */
+						break;
+					}
+				}
+			}
+
+			free(LocalHostName);
+			if(hent->h_aliases && hent->h_aliases[i]) {
+				CHKmalloc(LocalHostName = (uchar*)strdup(hent->h_aliases[i]));
+			} else {
+				CHKmalloc(LocalHostName = (uchar*)strdup(hent->h_name));
+			}
+
+			if((p = (uchar*)strchr((char*)LocalHostName, '.')))
+			{
+				*p++ = '\0';
+				LocalDomain = p;
+			}
+		}
+	}
+
+	/* LocalDomain is "" or part of LocalHostName, allocate a new string */
+	CHKmalloc(LocalDomain = (uchar*)strdup(LocalDomain));
+
+	/* Convert to lower case to recognize the correct domain laterly */
+	for(p = LocalDomain ; *p ; p++)
+		*p = (char)tolower((int)*p);
+
+	/* we now have our hostname and can set it inside the global vars.
+	 * TODO: think if all of this would better be a runtime function
+	 * rgerhards, 2008-04-17
+	 */
+	glbl.SetLocalHostName(LocalHostName);
+	glbl.SetLocalDomain(LocalDomain);
+	glbl.GenerateLocalHostNameProperty(); /* must be redone after conf processing, FQDN setting may have changed */
+finalize_it:
 	RETiRet;
 }
 
@@ -3017,7 +2446,7 @@ bufOptAdd(char opt, char *arg)
 	DEFiRet;
 	bufOpt_t *pBuf;
 
-	if((pBuf = malloc(sizeof(bufOpt_t))) == NULL)
+	if((pBuf = MALLOC(sizeof(bufOpt_t))) == NULL)
 		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 
 	pBuf->optchar = opt;
@@ -3075,7 +2504,7 @@ doGlblProcessInit(void)
 
 	thrdInit();
 
-	if( !(Debug || NoFork) )
+	if( !(Debug == DEBUG_FULL || NoFork) )
 	{
 		DBGPRINTF("Checking pidfile.\n");
 		if (!check_pid(PidFile))
@@ -3098,16 +2527,50 @@ doGlblProcessInit(void)
 				 */
 				exit(1); /* "good" exit - after forking, not diasabling anything */
 			}
+
 			num_fds = getdtablesize();
 			close(0);
 			/* we keep stdout and stderr open in case we have to emit something */
-			for (i = 3; i < num_fds; i++)
+			i = 3;
+
+			/* if (sd_booted()) */ {
+				const char *e;
+				char buf[24] = { '\0' };
+				char *p = NULL;
+				unsigned long l;
+				int sd_fds;
+
+				/* fork & systemd socket activation:
+				 * fetch listen pid and update to ours,
+				 * when it is set to pid of our parent.
+				 */
+				if ( (e = getenv("LISTEN_PID"))) {
+					errno = 0;
+					l = strtoul(e, &p, 10);
+					if (errno ==  0 && l > 0 && (!p || !*p)) {
+						if (getppid() == (pid_t)l) {
+							snprintf(buf, sizeof(buf), "%d",
+								 getpid());
+							setenv("LISTEN_PID", buf, 1);
+						}
+					}
+				}
+
+				/*
+				 * close only all further fds, except
+				 * of the fds provided by systemd.
+				 */
+				sd_fds = sd_listen_fds(0);
+				if (sd_fds > 0)
+					i = SD_LISTEN_FDS_START + sd_fds;
+			}
+			for ( ; i < num_fds; i++)
 				(void) close(i);
+
 			untty();
-		}
-		else
-		{
-			fputs(" Already running.\n", stderr);
+		} else {
+			fputs(" Already running. If you want to run multiple instances, you need "
+			      "to specify different pid files (use -i option)\n", stderr);
 			exit(1); /* "good" exit, done if syslogd is already running */
 		}
 	}
@@ -3145,6 +2608,8 @@ doGlblProcessInit(void)
 	sigaction(SIGCHLD, &sigAct, NULL);
 	sigAct.sa_handler = Debug ? debug_switch : SIG_IGN;
 	sigaction(SIGUSR1, &sigAct, NULL);
+	sigAct.sa_handler = sigttin_handler;
+	sigaction(SIGTTIN, &sigAct, NULL); /* (ab)used to interrupt input threads */
 	sigAct.sa_handler = SIG_IGN;
 	sigaction(SIGPIPE, &sigAct, NULL);
 	sigaction(SIGXFSZ, &sigAct, NULL); /* do not abort if 2gig file limit is hit */
@@ -3157,12 +2622,10 @@ doGlblProcessInit(void)
  * modularize it a bit more...
  */
 int realMain(int argc, char **argv)
-{	
+{
 	DEFiRet;
 
-	register uchar *p;
 	int ch;
-	struct hostent *hent;
 	extern int optind;
 	extern char *optarg;
 	int bEOptionWasGiven = 0;
@@ -3171,9 +2634,7 @@ int realMain(int argc, char **argv)
 	int bChDirRoot = 1; /* change the current working directory to "/"? */
 	char *arg;	/* for command line option processing */
 	uchar legacyConfLine[80];
-	uchar *LocalHostName;
-	uchar *LocalDomain;
-	uchar *LocalFQDNName;
+	char cwdbuf[128]; /* buffer to obtain/display current working directory */
 
 	/* first, parse the command line options. We do not carry out any actual work, just
 	 * see what we should do. This relieves us from certain anomalies and we can process
@@ -3186,7 +2647,7 @@ int realMain(int argc, char **argv)
 	 * of other options, we do this during the inital option processing. With later
 	 * versions (if a dependency on -c option is introduced), we must move that code
 	 * to other places, but I think it is quite appropriate and saves code to do this
-	 * only when actually neeeded. 
+        * only when actually neeeded.
 	 * rgerhards, 2008-04-04
 	 */
 	while((ch = getopt(argc, argv, "46a:Ac:def:g:hi:l:m:M:nN:op:qQr::s:t:T:u:vwx")) != EOF) {
@@ -3251,17 +2712,18 @@ int realMain(int argc, char **argv)
 		case 'v': /* MUST be carried out immediately! */
 			printVersion();
 			exit(0); /* exit for -v option - so this is a "good one" */
-		case '?':              
+               case '?':
 		default:
 			usage();
 		}
 	}
 
-	if ((argc -= optind))
+	if(argc - optind)
 		usage();
 
-	DBGPRINTF("rsyslogd %s startup, compatibility mode %d, module path '%s'\n",
-		  VERSION, iCompatibilityMode, glblModPath == NULL ? "" : (char*)glblModPath);
+	DBGPRINTF("rsyslogd %s startup, compatibility mode %d, module path '%s', cwd:%s\n",
+		  VERSION, iCompatibilityMode, glblModPath == NULL ? "" : (char*)glblModPath,
+		  getcwd(cwdbuf, sizeof(cwdbuf)));
 
 	/* we are done with the initial option parsing and processing. Now we init the system. */
 
@@ -3279,7 +2741,7 @@ int realMain(int argc, char **argv)
 
 	/* we need to create the inputName property (only once during our lifetime) */
 	CHKiRet(prop.Construct(&pInternalInputName));
-	CHKiRet(prop.SetString(pInternalInputName, UCHAR_CONSTANT("rsyslogd"), sizeof("rsyslgod") - 1));
+	CHKiRet(prop.SetString(pInternalInputName, UCHAR_CONSTANT("rsyslogd"), sizeof("rsyslogd") - 1));
 	CHKiRet(prop.ConstructFinalize(pInternalInputName));
 
 	CHKiRet(prop.Construct(&pLocalHostIP));
@@ -3289,52 +2751,7 @@ int realMain(int argc, char **argv)
 	/* get our host and domain names - we need to do this early as we may emit
 	 * error log messages, which need the correct hostname. -- rgerhards, 2008-04-04
 	 */
-	net.getLocalHostname(&LocalFQDNName);
-	CHKmalloc(LocalHostName = (uchar*) strdup((char*)LocalFQDNName));
-	glbl.SetLocalFQDNName(LocalFQDNName); /* set the FQDN before we modify it */
-	if((p = (uchar*)strchr((char*)LocalHostName, '.'))) {
-		*p++ = '\0';
-		LocalDomain = p;
-	} else {
-		LocalDomain = (uchar*)"";
-
-		/* It's not clearly defined whether gethostname()
-		 * should return the simple hostname or the fqdn. A
-		 * good piece of software should be aware of both and
-		 * we want to distribute good software.  Joey
-		 *
-		 * Good software also always checks its return values...
-		 * If syslogd starts up before DNS is up & /etc/hosts
-		 * doesn't have LocalHostName listed, gethostbyname will
-		 * return NULL. 
-		 */
-		/* TODO: gethostbyname() is not thread-safe, but replacing it is
-		 * not urgent as we do not run on multiple threads here. rgerhards, 2007-09-25
-		 */
-		hent = gethostbyname((char*)LocalHostName);
-		if(hent) {
-			free(LocalHostName);
-			CHKmalloc(LocalHostName = (uchar*)strdup(hent->h_name));
-				
-			if((p = (uchar*)strchr((char*)LocalHostName, '.')))
-			{
-				*p++ = '\0';
-				LocalDomain = p;
-			}
-		}
-	}
-
-	/* Convert to lower case to recognize the correct domain laterly */
-	for(p = LocalDomain ; *p ; p++)
-		*p = (char)tolower((int)*p);
-	
-	/* we now have our hostname and can set it inside the global vars.
-	 * TODO: think if all of this would better be a runtime function
-	 * rgerhards, 2008-04-17
-	 */
-	glbl.SetLocalHostName(LocalHostName);
-	glbl.SetLocalDomain(LocalDomain);
-	glbl.GenerateLocalHostNameProperty(); /* must be redone after conf processing, FQDN setting may have changed */
+	queryLocalHostname();
 
 	/* initialize the objects */
 	if((iRet = modInitIminternal()) != RS_RET_OK) {
@@ -3473,7 +2890,7 @@ int realMain(int argc, char **argv)
 		case 'u':		/* misc user settings */
 			iHelperUOpt = atoi(arg);
 			if(iHelperUOpt & 0x01)
-				bParseHOSTNAMEandTAG = 0;
+				glbl.SetParseHOSTNAMEandTAG(0);
 			if(iHelperUOpt & 0x02)
 				bChDirRoot = 0;
 			break;
@@ -3483,7 +2900,7 @@ int realMain(int argc, char **argv)
 		case 'x':		/* disable dns for remote messages */
 			glbl.SetDisableDNS(1);
 			break;
-		case '?':              
+               case '?':
 		default:
 			usage();
 		}
@@ -3507,7 +2924,7 @@ int realMain(int argc, char **argv)
 	if(iCompatibilityMode < 4) {
 		errmsg.LogError(0, NO_ERRCODE, "WARNING: rsyslogd is running in compatibility mode. Automatically "
 		                            "generated config directives may interfer with your rsyslog.conf settings. "
-					    "We suggest upgrading your config and adding -c4 as the first "
+					    "We suggest upgrading your config and adding -c5 as the first "
 					    "rsyslogd option.");
 	}
 
@@ -3532,15 +2949,12 @@ int realMain(int argc, char **argv)
 	if(!iConfigVerify)
 		CHKiRet(doGlblProcessInit());
 
-	/* re-generate local host name property, as the config may have changed our FQDN settings */
-	glbl.GenerateLocalHostNameProperty();
-
 	CHKiRet(mainThread());
 
 	/* do any de-init's that need to be done AFTER this comment */
 
 	die(bFinished);
-	
+
 	thrdExit();
 
 finalize_it:
@@ -3562,7 +2976,7 @@ finalize_it:
  * rgerhards, 20080-01-28
  */
 int main(int argc, char **argv)
-{	
+{
 	dbgClassInit();
 	return realMain(argc, argv);
 }

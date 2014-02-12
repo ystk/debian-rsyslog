@@ -6,32 +6,28 @@
  * because the config file handler will by dynamically be loaded and be
  * kept in memory only as long as the config file is actually being 
  * processed. Thereafter, it shall be unloaded. -- rgerhards
+ * Please note that the original syslogd.c source was under BSD license
+ * at the time of the rsyslog fork from sysklogd.
  *
- * TODO: the license MUST be changed to LGPL. However, we can not
- * currently do that, because we use some sysklogd code to crunch
- * the selector lines (e.g. *.info). That code is scheduled for removal
- * as part of RainerScript. After this is done, we can change licenses.
- *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-#define CFGLNSIZ 4096 /* the maximum size of a configuraton file line, after re-combination */
+#define CFGLNSIZ 64*1024 /* the maximum size of a configuraton file line, after re-combination */
 #include "config.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -93,19 +89,18 @@ DEFobjCurrIf(net)
 DEFobjCurrIf(rule)
 DEFobjCurrIf(ruleset)
 
-static int iNbrActions; /* number of actions the running config has. Needs to be init on ReInitConf() */
+static int iNbrActions = 0; /* number of currently defined actions */
 
-/* The following global variables are used for building
+/* The following module-global variables are used for building
  * tag and host selector lines during startup and config reload.
  * This is stored as a global variable pool because of its ease. It is
  * also fairly compatible with multi-threading as the stratup code must
- * be run in a single thread anyways. So there can be no race conditions. These
- * variables are no longer used once the configuration has been loaded (except,
- * of course, during a reload). rgerhards 2005-10-18
+ * be run in a single thread anyways. So there can be no race conditions.
+ * rgerhards 2005-10-18
  */
-EHostnameCmpMode eDfltHostnameCmpMode;
-cstr_t *pDfltHostnameCmp;
-cstr_t *pDfltProgNameCmp;
+static EHostnameCmpMode eDfltHostnameCmpMode = HN_NO_COMP;
+static cstr_t *pDfltHostnameCmp = NULL;
+static cstr_t *pDfltProgNameCmp = NULL;
 
 
 /* process a directory and include all of its files into
@@ -450,6 +445,9 @@ processConfFile(uchar *pConfFile)
 			if ((p - cbuf) > CFGLNSIZ - 30) {
 				/* Oops the buffer is full - what now? */
 				cline = cbuf;
+				dbgprintf("buffer overflow extending config file\n");
+				errmsg.LogError(0, RS_RET_CONFIG_ERROR,
+					"error: config file line %d too long", iLnNbr);
 			} else {
 				*p = 0;
 				cline = p;
@@ -925,7 +923,7 @@ static rsRetVal cflineProcessPropFilter(uchar **pline, register rule_t *f)
 	}
 
 	/* skip to action part */
-	if((iRet = parsSkipWhitespace(pPars)) != RS_RET_OK) {
+	if((iRet = parsSkipWhitespace(pPars, 1)) != RS_RET_OK) {
 		errmsg.LogError(0, iRet, "error %d skipping to action part - ignoring selector", iRet);
 		rsParsDestruct(pPars);
 		return(iRet);
@@ -1041,7 +1039,7 @@ static rsRetVal cflineDoFilter(uchar **pp, rule_t *f)
 	DEFiRet;
 
 	ASSERT(pp != NULL);
-	ASSERT(f != NULL);
+	ISOBJ_TYPE_assert(f, rule);
 
 	/* check which filter we need to pull... */
 	switch(**pp) {
@@ -1063,6 +1061,7 @@ static rsRetVal cflineDoFilter(uchar **pp, rule_t *f)
 	 * and, if so, we copy them over. rgerhards, 2005-10-18
 	 */
 	if(pDfltProgNameCmp != NULL) {
+RUNLOG_STR("dflt ProgNameCmp != NULL, setting opCSProgNameComp");
 		CHKiRet(rsCStrConstructFromCStr(&(f->pCSProgNameComp), pDfltProgNameCmp));
 	}
 
@@ -1084,7 +1083,7 @@ static rsRetVal cflineDoAction(uchar **p, action_t **ppAction)
 	DEFiRet;
 	modInfo_t *pMod;
 	omodStringRequest_t *pOMSR;
-	action_t *pAction;
+	action_t *pAction = NULL;
 	void *pModData;
 
 	ASSERT(p != NULL);
@@ -1092,6 +1091,11 @@ static rsRetVal cflineDoAction(uchar **p, action_t **ppAction)
 
 	/* loop through all modules and see if one picks up the line */
 	pMod = module.GetNxtType(NULL, eMOD_OUT);
+	/* Note: clang static analyzer reports that pMod mybe == NULL. However, this is
+	 * not possible, because we have the built-in output modules which are always
+	 * present. Anyhow, we guard this by an assert. -- rgerhards, 2010-12-16
+	 */
+	assert(pMod != NULL);
 	while(pMod != NULL) {
 		pOMSR = NULL;
 		iRet = pMod->mod.om.parseSelectorAct(p, &pModData, &pOMSR);
@@ -1105,7 +1109,7 @@ static rsRetVal cflineDoAction(uchar **p, action_t **ppAction)
 					dbgprintf("module is incompatible with RepeatedMsgReduction - turned off\n");
 					pAction->f_ReduceRepeated = 0;
 				}
-				pAction->bEnabled = 1; /* action is enabled */
+				pAction->eState = ACT_STATE_RDY; /* action is enabled */
 				iNbrActions++;	/* one more active action! */
 			}
 			break;
@@ -1207,21 +1211,6 @@ cfline(uchar *line, rule_t **pfCurr)
 }
 
 
-/* Reinitialize the configuration subsystem. This is a "work-around" to the fact
- * that we do not yet have actual config objects. This method is to be called
- * whenever a totally new config is started (which means on startup and HUP).
- * Note that it MUST NOT be called for an included config file.
- * rgerhards, 2008-07-28
- */
-static rsRetVal
-ReInitConf(void)
-{
-	DEFiRet;
-	iNbrActions = 0;	/* this is what we created the function for ;) - action count is reset */
-	RETiRet;
-}
-
-
 /* return the current number of active actions
  * rgerhards, 2008-07-28
  */
@@ -1255,7 +1244,6 @@ CODESTARTobjQueryInterface(conf)
 	pIf->doIncludeLine = doIncludeLine;
 	pIf->cfline = cfline;
 	pIf->processConfFile = processConfFile;
-	pIf->ReInitConf = ReInitConf;
 	pIf->GetNbrActActions = GetNbrActActions;
 
 finalize_it:
@@ -1267,6 +1255,15 @@ ENDobjQueryInterface(conf)
  */
 BEGINObjClassExit(conf, OBJ_IS_CORE_MODULE) /* CHANGE class also in END MACRO! */
 CODESTARTObjClassExit(conf)
+	/* free no-longer needed module-global variables */
+	if(pDfltHostnameCmp != NULL) {
+		rsCStrDestruct(&pDfltHostnameCmp);
+	}
+
+	if(pDfltProgNameCmp != NULL) {
+		rsCStrDestruct(&pDfltProgNameCmp);
+	}
+
 	/* release objects we no longer need */
 	objRelease(expr, CORE_COMPONENT);
 	objRelease(ctok, CORE_COMPONENT);

@@ -37,22 +37,28 @@ subdir = doc
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/atomic_operations.m4 \
+	$(top_srcdir)/m4/atomic_operations_64bit.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
 	$(top_srcdir)/m4/ltsugar.m4 $(top_srcdir)/m4/ltversion.m4 \
-	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/m4/shave.m4 \
-	$(top_srcdir)/configure.ac
+	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = $(top_builddir)/config.h
 CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
+AM_V_GEN = $(am__v_GEN_$(V))
+am__v_GEN_ = $(am__v_GEN_$(AM_DEFAULT_VERBOSITY))
+am__v_GEN_0 = @echo "  GEN   " $@;
+AM_V_at = $(am__v_at_$(V))
+am__v_at_ = $(am__v_at_$(AM_DEFAULT_VERBOSITY))
+am__v_at_0 = @
 SOURCES =
 DIST_SOURCES =
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
-AM_MAKEFLAGS = @AM_MAKEFLAGS@
+AM_DEFAULT_VERBOSITY = @AM_DEFAULT_VERBOSITY@
 AR = @AR@
 AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
@@ -63,7 +69,6 @@ CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
-CXX = @CXX@
 CYGPATH_W = @CYGPATH_W@
 DEFS = @DEFS@
 DEPDIR = @DEPDIR@
@@ -75,8 +80,6 @@ ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
 EGREP = @EGREP@
 EXEEXT = @EXEEXT@
-F77 = @F77@
-FC = @FC@
 FGREP = @FGREP@
 GNUTLS_CFLAGS = @GNUTLS_CFLAGS@
 GNUTLS_LIBS = @GNUTLS_LIBS@
@@ -86,6 +89,7 @@ HAVE_JAVAC = @HAVE_JAVAC@
 HAVE_MYSQL_CONFIG = @HAVE_MYSQL_CONFIG@
 HAVE_ORACLE_CONFIG = @HAVE_ORACLE_CONFIG@
 HAVE_PGSQL_CONFIG = @HAVE_PGSQL_CONFIG@
+IMUDP_LIBS = @IMUDP_LIBS@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -103,14 +107,12 @@ LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
-MAKEFLAGS = @MAKEFLAGS@
 MAKEINFO = @MAKEINFO@
 MKDIR_P = @MKDIR_P@
 MYSQL_CFLAGS = @MYSQL_CFLAGS@
 MYSQL_LIBS = @MYSQL_LIBS@
 NM = @NM@
 NMEDIT = @NMEDIT@
-OBJC = @OBJC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
 ORACLE_CFLAGS = @ORACLE_CFLAGS@
@@ -128,9 +130,10 @@ PATH_SEPARATOR = @PATH_SEPARATOR@
 PGSQL_CFLAGS = @PGSQL_CFLAGS@
 PGSQL_LIBS = @PGSQL_LIBS@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 PTHREADS_CFLAGS = @PTHREADS_CFLAGS@
 PTHREADS_LIBS = @PTHREADS_LIBS@
-Q = @Q@
 RANLIB = @RANLIB@
 RELP_CFLAGS = @RELP_CFLAGS@
 RELP_LIBS = @RELP_LIBS@
@@ -144,7 +147,8 @@ SNMP_CFLAGS = @SNMP_CFLAGS@
 SNMP_LIBS = @SNMP_LIBS@
 SOL_LIBS = @SOL_LIBS@
 STRIP = @STRIP@
-V = @V@
+UDPSPOOF_CFLAGS = @UDPSPOOF_CFLAGS@
+UDPSPOOF_LIBS = @UDPSPOOF_LIBS@
 VERSION = @VERSION@
 ZLIB_LIBS = @ZLIB_LIBS@
 abs_builddir = @abs_builddir@
@@ -170,6 +174,7 @@ datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
 exec_prefix = @exec_prefix@
+have_valgrind = @have_valgrind@
 host = @host@
 host_alias = @host_alias@
 host_cpu = @host_cpu@
@@ -183,7 +188,6 @@ libdir = @libdir@
 libexecdir = @libexecdir@
 localedir = @localedir@
 localstatedir = @localstatedir@
-lt_ECHO = @lt_ECHO@
 mandir = @mandir@
 mkdir_p = @mkdir_p@
 moddirs = @moddirs@
@@ -194,9 +198,9 @@ program_transform_name = @program_transform_name@
 psdir = @psdir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
-shavedir = @shavedir@
 srcdir = @srcdir@
 sysconfdir = @sysconfdir@
+systemdsystemunitdir = @systemdsystemunitdir@
 target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
@@ -234,16 +238,24 @@ html_files = \
 	version_naming.html \
 	contributors.html \
 	dev_queue.html \
+	omstdout.html \
+	omudpspoof.html \
+	omruleset.html \
 	omsnmp.html \
 	ommysql.html \
 	omoracle.html \
 	omlibdbi.html \
 	imfile.html \
 	imtcp.html \
+	imptcp.html \
+	impstats.html \
 	imgssapi.html \
 	imrelp.html \
+	imsolaris.html \
 	imuxsock.html \
 	imklog.html \
+	pmlastmsg.html \
+	mmsnmptrapd.html \
 	queues.html \
 	src/queueWorkerLogic.dia \
 	queueWorkerLogic.jpg \
@@ -266,6 +278,7 @@ html_files = \
 	rsconf1_actionresumeinterval.html \
 	rsconf1_allowedsender.html \
 	rsconf1_controlcharacterescapeprefix.html \
+	rsconf1_escape8bitcharsonreceive.html \
 	rsconf1_debugprintcfsyslinehandlerlist.html \
 	rsconf1_debugprintmodulelist.html \
 	rsconf1_debugprinttemplatelist.html \
@@ -291,9 +304,12 @@ html_files = \
 	rsconf1_moddir.html \
 	rsconf1_repeatedmsgreduction.html \
 	rsconf1_resetconfigvariables.html \
+	rsconf1_rulesetcreatemainqueue.html \
 	rsconf1_umask.html \
+	rsconf1_rulesetparser.html \
 	v3compatibility.html \
 	v4compatibility.html \
+	v5compatibility.html \
 	im3195.html \
 	netstream.html \
 	ns_gtls.html \
@@ -302,6 +318,7 @@ html_files = \
 	gssapi.html \
 	licensing.html \
 	ommail.html \
+	omuxsock.html \
 	omrelp.html \
 	syslog_parsing.html \
 	troubleshoot.html \
@@ -320,6 +337,7 @@ html_files = \
 grfx_files = \
 	rsyslog_confgraph_complex.png\
 	rsyslog_confgraph_std.png \
+	module_workflow.png \
 	direct_queue0.png \
 	direct_queue1.png \
 	direct_queue2.png \
@@ -330,6 +348,8 @@ grfx_files = \
 	dataflow.png \
 	queue_analogy_tv.png \
 	gssapi.png \
+	rfc5424layers.png \
+	src/rfc5424layers.dia \
 	rsyslog-vers.png
 
 EXTRA_DIST = $(html_files) $(grfx_files)

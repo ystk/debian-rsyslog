@@ -46,11 +46,16 @@
 #include "srUtils.h"
 #include "obj.h"
 
+#if _POSIX_TIMERS <= 0
+#include <sys/time.h>
+#endif
 
 /* here we host some syslog specific names. There currently is no better place
  * to do it, but over here is also not ideal... -- rgerhards, 2008-02-14
  * rgerhards, 2008-04-16: note in LGPL move: the code tables below exist in
  * the same way in BSD, so it is not a problem to move them from GPLv3 to LGPL.
+ * And nobody modified them since it was under LGPL, so we can also move it
+ * to ASL 2.0.
  */
 syslogName_t	syslogPriNames[] = {
 	{"alert",	LOG_ALERT},
@@ -158,7 +163,7 @@ uchar *srUtilStrDup(uchar *pOld, size_t len)
 
 	assert(pOld != NULL);
 	
-	if((pNew = malloc(len + 1)) != NULL)
+	if((pNew = MALLOC(len + 1)) != NULL)
 		memcpy(pNew, pOld, len + 1);
 
 	return pNew;
@@ -197,7 +202,7 @@ int makeFileParentDirs(uchar *szFile, size_t lenFile, mode_t mode,
 	assert(lenFile > 0);
 
         len = lenFile + 1; /* add one for '\0'-byte */
-	if((pszWork = malloc(sizeof(uchar) * len)) == NULL)
+	if((pszWork = MALLOC(sizeof(uchar) * len)) == NULL)
 		return -1;
         memcpy(pszWork, szFile, len);
         for(p = pszWork+1 ; *p ; p++)
@@ -346,7 +351,7 @@ rsRetVal genFileName(uchar **ppName, uchar *pDirName, size_t lenDirName, uchar *
 	}
 
 	lenName = lenDirName + 1 + lenFName + lenBuf + 1; /* last +1 for \0 char! */
-	if((pName = malloc(sizeof(uchar) * lenName)) == NULL)
+	if((pName = MALLOC(sizeof(uchar) * lenName)) == NULL)
 		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 	
 	/* got memory, now construct string */
@@ -392,10 +397,22 @@ int getNumberDigits(long lNum)
 rsRetVal
 timeoutComp(struct timespec *pt, long iTimeout)
 {
+#	if _POSIX_TIMERS <= 0
+	struct timeval tv;
+#	endif
+
 	BEGINfunc
 	assert(pt != NULL);
 	/* compute timeout */
+
+#	if _POSIX_TIMERS > 0
+	/* this is the "regular" code */
 	clock_gettime(CLOCK_REALTIME, pt);
+#	else
+	gettimeofday(&tv, NULL);
+	pt->tv_sec = tv.tv_sec;
+	pt->tv_nsec = tv.tv_usec * 1000;
+#	endif
 	pt->tv_sec += iTimeout / 1000;
 	pt->tv_nsec += (iTimeout % 1000) * 1000000; /* think INTEGER arithmetic! */
 	if(pt->tv_nsec > 999999999) { /* overrun? */
@@ -417,11 +434,21 @@ timeoutVal(struct timespec *pt)
 {
 	struct timespec t;
 	long iTimeout;
-	BEGINfunc
+#	if _POSIX_TIMERS <= 0
+	struct timeval tv;
+#	endif
 
+	BEGINfunc
 	assert(pt != NULL);
 	/* compute timeout */
+#	if _POSIX_TIMERS > 0
+	/* this is the "regular" code */
 	clock_gettime(CLOCK_REALTIME, &t);
+#	else
+	gettimeofday(&tv, NULL);
+	t.tv_sec = tv.tv_sec;
+	t.tv_nsec = tv.tv_usec * 1000;
+#	endif
 	iTimeout = (pt->tv_nsec - t.tv_nsec) / 1000000;
 	iTimeout += (pt->tv_sec - t.tv_sec) * 1000;
 

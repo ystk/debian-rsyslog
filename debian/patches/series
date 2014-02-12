@@ -1,3 +1,5 @@
 # Debian patches for rsyslog
 01-dont_create_db.patch
-02-tls_loop_fix.patch
+02-path_max.patch
+03-fix_relp_dns_resolution.patch
+04-systemd_journal.patch

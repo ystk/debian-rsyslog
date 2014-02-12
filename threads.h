@@ -1,23 +1,22 @@
 /* Definition of the threading support module.
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef THREADS_H_INCLUDED
@@ -25,12 +24,14 @@
 
 /* the thread object */
 struct thrdInfo {
-	pthread_mutex_t *mutTermOK;	/* Is it ok to terminate that thread now? */
+	pthread_mutex_t mutThrd;/* mutex for handling long-running operations and shutdown */
+	pthread_cond_t condThrdTerm;/* condition: thread terminates (used just for shutdown loop) */
 	int bIsActive;		/* Is thread running? */
 	int bShallStop;		/* set to 1 if the thread should be stopped ? */
 	rsRetVal (*pUsrThrdMain)(struct thrdInfo*); /* user thread main to be called in new thread */
 	rsRetVal (*pAfterRun)(struct thrdInfo*);   /* cleanup function */
 	pthread_t thrdID;
+	sbool bNeedsCancel;	/* must input be terminated by pthread_cancel()? */
 };
 
 /* prototypes */
@@ -38,8 +39,7 @@ rsRetVal thrdExit(void);
 rsRetVal thrdInit(void);
 rsRetVal thrdTerminate(thrdInfo_t *pThis);
 rsRetVal thrdTerminateAll(void);
-rsRetVal thrdCreate(rsRetVal (*thrdMain)(thrdInfo_t*), rsRetVal(*afterRun)(thrdInfo_t *));
-rsRetVal thrdSleep(thrdInfo_t *pThis, int iSeconds, int iuSeconds);
+rsRetVal thrdCreate(rsRetVal (*thrdMain)(thrdInfo_t*), rsRetVal(*afterRun)(thrdInfo_t *), sbool);
 
 /* macros (replace inline functions) */
 

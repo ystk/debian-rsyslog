@@ -65,8 +65,8 @@ BSD syslogd. For example, when TAG is "named[12345]", programname is
 </tr>
 <tr>
 <td><b>pri-text</b></td>
-<td>the PRI part of the message in a textual form (e.g.
-"syslog.info")</td>
+<td>the PRI part of the message in a textual form with the numerical PRI appended in 
+brackes (e.g.  "local0.err<133>")</td>
 </tr>
 <tr>
 <td><b>iut</b></td>
@@ -154,6 +154,12 @@ based on where they originated - e.g. locally generated messages
 ("rsyslogd", "imuxsock", "imklog") should go to a different place
 than messages generated somewhere.
 </td>
+</tr>
+<tr>
+<td><b>$bom</b></td>
+<td>The UTF-8 encoded Unicode byte-order mask (BOM). This may be useful
+in templates for RFC5424 support, when the character set is know to be
+Unicode.</td>
 </tr>
 <tr>
 <td><b>$now</b></td>

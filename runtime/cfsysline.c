@@ -3,27 +3,25 @@
  *
  * File begun on 2007-07-30 by RGerhards
  *
- * Copyright (C) 2007, 2008 by Rainer Gerhards and Adiscon GmbH.
+ * Copyright (C) 2007-2012 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 
@@ -41,6 +39,7 @@
 #include "obj.h"
 #include "errmsg.h"
 #include "srUtils.h"
+#include "unicode-helper.h"
 
 
 /* static data */
@@ -217,9 +216,11 @@ static rsRetVal doGetSize(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *
 		case 'K': i *= 1000; ++(*pp); break;
 	        case 'M': i *= 1000000; ++(*pp); break;
                 case 'G': i *= 1000000000; ++(*pp); break;
-                case 'T': i *= 1000000000000; ++(*pp); break; /* tera */
-                case 'P': i *= 1000000000000000; ++(*pp); break; /* peta */
-                case 'E': i *= 1000000000000000000; ++(*pp); break; /* exa */
+			  /* we need to use the multiplication below because otherwise
+			   * the compiler gets an error during constant parsing */
+                case 'T': i *= (int64) 1000       * 1000000000; ++(*pp); break; /* tera */
+                case 'P': i *= (int64) 1000000    * 1000000000; ++(*pp); break; /* peta */
+                case 'E': i *= (int64) 1000000000 * 1000000000; ++(*pp); break; /* exa */
 	}
 
 	/* done */
@@ -509,6 +510,8 @@ static rsRetVal doGetWord(uchar **pp, rsRetVal (*pSetHdlr)(void*, uchar*), void 
 	CHKiRet(cstrConvSzStrAndDestruct(pStrB, &pNewVal, 0));
 	pStrB = NULL;
 
+	DBGPRINTF("doGetWord: get newval '%s' (len %d), hdlr %p\n",
+		  pNewVal, (int) ustrlen(pNewVal), pSetHdlr);
 	/* we got the word, now set it */
 	if(pSetHdlr == NULL) {
 		/* we should set value directly to var */
@@ -951,8 +954,6 @@ finalize_it:
  */
 void dbgPrintCfSysLineHandlers(void)
 {
-	DEFiRet;
-
 	cslCmd_t *pCmd;
 	cslCmdHdlr_t *pCmdHdlr;
 	linkedListCookie_t llCookieCmd;
@@ -961,11 +962,11 @@ void dbgPrintCfSysLineHandlers(void)
 
 	dbgprintf("Sytem Line Configuration Commands:\n");
 	llCookieCmd = NULL;
-	while((iRet = llGetNextElt(&llCmdList, &llCookieCmd, (void*)&pCmd)) == RS_RET_OK) {
+	while(llGetNextElt(&llCmdList, &llCookieCmd, (void*)&pCmd) == RS_RET_OK) {
 		llGetKey(llCookieCmd, (void*) &pKey); /* TODO: using the cookie is NOT clean! */
 		dbgprintf("\tCommand '%s':\n", pKey);
 		llCookieCmdHdlr = NULL;
-		while((iRet = llGetNextElt(&pCmd->llCmdHdlrs, &llCookieCmdHdlr, (void*)&pCmdHdlr)) == RS_RET_OK) {
+		while(llGetNextElt(&pCmd->llCmdHdlrs, &llCookieCmdHdlr, (void*)&pCmdHdlr) == RS_RET_OK) {
 			dbgprintf("\t\ttype : %d\n", pCmdHdlr->eType);
 			dbgprintf("\t\tpData: 0x%lx\n", (unsigned long) pCmdHdlr->pData);
 			dbgprintf("\t\tHdlr : 0x%lx\n", (unsigned long) pCmdHdlr->cslCmdHdlr);
@@ -974,7 +975,6 @@ void dbgPrintCfSysLineHandlers(void)
 		}
 	}
 	dbgprintf("\n");
-	ENDfunc
 }
 
 

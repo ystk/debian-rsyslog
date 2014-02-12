@@ -1,1 +1,2 @@
 /etc/rsyslog.d/
+/var/spool/rsyslog/

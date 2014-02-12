@@ -1,5 +1,8 @@
 #!/usr/bin/make -f
 
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
 %:
 	dh $@ --with autotools_dev
 
@@ -9,10 +12,19 @@ override_dh_auto_configure:
 		--enable-pgsql \
 		--enable-mail \
 		--enable-imfile \
+		--enable-impstats \
 		--enable-gssapi-krb5 \
 		--enable-gnutls \
 		--enable-relp \
-		--disable-testbench
+		--enable-pmaixforwardedfrom \
+		--enable-pmcisconames \
+		--enable-pmlastmsg \
+		--enable-pmrfc3164sd \
+		--enable-pmsnare \
+		--enable-omprog \
+		--enable-omuxsock \
+		--disable-testbench \
+		--with-systemdsystemunitdir=/lib/systemd/system
 
 override_dh_auto_install:
 	dh_auto_install

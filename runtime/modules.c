@@ -11,7 +11,7 @@
  *
  * File begun on 2007-07-22 by RGerhards
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -57,10 +57,14 @@
 #include "cfsysline.h"
 #include "modules.h"
 #include "errmsg.h"
+#include "parser.h"
+#include "strgen.h"
 
 /* static data */
 DEFobjStaticHelpers
 DEFobjCurrIf(errmsg)
+DEFobjCurrIf(parser)
+DEFobjCurrIf(strgen)
 
 /* we must ensure that only one thread at one time tries to load or unload
  * modules, otherwise we may see race conditions. This first came up with
@@ -73,9 +77,32 @@ static pthread_mutex_t mutLoadUnload;
 static modInfo_t *pLoadedModules = NULL;	/* list of currently-loaded modules */
 static modInfo_t *pLoadedModulesLast = NULL;	/* tail-pointer */
 
+/* already dlopen()-ed libs */
+static struct dlhandle_s *pHandles = NULL;
+
 /* config settings */
 uchar	*pModDir = NULL; /* read-only after startup */
 
+
+/* we provide a set of dummy functions for modules that do not support the
+ * some interfaces.
+ * On the commit feature: As the modules do not support it, they commit each message they
+ * receive, and as such the dummies can always return RS_RET_OK without causing
+ * harm. This simplifies things as in action processing we do not need to check
+ * if the transactional entry points exist.
+ */
+static rsRetVal dummyBeginTransaction() 
+{
+	return RS_RET_OK;
+}
+static rsRetVal dummyEndTransaction() 
+{
+	return RS_RET_OK;
+}
+static rsRetVal dummyIsCompatibleWithFeature() 
+{
+	return RS_RET_INCOMPATIBLE;
+}
 
 #ifdef DEBUG
 /* we add some home-grown support to track our users (and detect who does not free us). In
@@ -208,11 +235,30 @@ static void moduleDestruct(modInfo_t *pThis)
 #	ifdef	VALGRIND
 #		warning "dlclose disabled for valgrind"
 #	else
-		dlclose(pThis->pModHdlr);
+		if (pThis->eKeepType == eMOD_NOKEEP) {
+			dlclose(pThis->pModHdlr);
+		}
 #	endif
 	}
 
 	free(pThis);
+}
+
+
+/* This enables a module to query the core for specific features.
+ * rgerhards, 2009-04-22
+ */
+static rsRetVal queryCoreFeatureSupport(int *pBool, unsigned uFeat)
+{
+	DEFiRet;
+
+	if((pBool == NULL))
+		ABORT_FINALIZE(RS_RET_PARAM_ERROR);
+
+	*pBool = (uFeat & CORE_FEATURE_BATCHING) ? 1 : 0;
+
+finalize_it:
+	RETiRet;
 }
 
 
@@ -222,13 +268,15 @@ static void moduleDestruct(modInfo_t *pThis)
  * is my current shool of thinking.
  * Please note that the implementation as a query interface allows to take
  * care of plug-in interface version differences. -- rgerhards, 2007-07-31
+ * ... but often it better not to use a new interface. So we now add core
+ * functions here that a plugin may request. -- rgerhards, 2009-04-22
  */
 static rsRetVal queryHostEtryPt(uchar *name, rsRetVal (**pEtryPoint)())
 {
 	DEFiRet;
 
 	if((name == NULL) || (pEtryPoint == NULL))
-		return RS_RET_PARAM_ERROR;
+		ABORT_FINALIZE(RS_RET_PARAM_ERROR);
 
 	if(!strcmp((char*) name, "regCfSysLineHdlr")) {
 		*pEtryPoint = regCfSysLineHdlr;
@@ -236,6 +284,8 @@ static rsRetVal queryHostEtryPt(uchar *name, rsRetVal (**pEtryPoint)())
 		*pEtryPoint = objGetObjInterface;
 	} else if(!strcmp((char*) name, "OMSRgetSupportedTplOpts")) {
 		*pEtryPoint = OMSRgetSupportedTplOpts;
+	} else if(!strcmp((char*) name, "queryCoreFeatureSupport")) {
+		*pEtryPoint = queryCoreFeatureSupport;
 	} else {
 		*pEtryPoint = NULL; /* to  be on the safe side */
 		ABORT_FINALIZE(RS_RET_ENTRY_POINT_NOT_FOUND);
@@ -361,10 +411,16 @@ finalize_it:
 static rsRetVal
 doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_t*), uchar *name, void *pModHdlr)
 {
-	DEFiRet;
 	rsRetVal localRet;
 	modInfo_t *pNew = NULL;
+	uchar *pName;
+	parser_t *pParser; /* used for parser modules */
+	strgen_t *pStrgen; /* used for strgen modules */
+	rsRetVal (*GetName)(uchar**);
 	rsRetVal (*modGetType)(eModType_t *pType);
+	rsRetVal (*modGetKeepType)(eModKeepType_t *pKeepType);
+	struct dlhandle_s *pHandle = NULL;
+	DEFiRet;
 
 	assert(modInit != NULL);
 
@@ -384,6 +440,8 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 	 */
 	CHKiRet((*pNew->modQueryEtryPt)((uchar*)"getType", &modGetType));
 	CHKiRet((*modGetType)(&pNew->eType));
+	CHKiRet((*pNew->modQueryEtryPt)((uchar*)"getKeepType", &modGetKeepType));
+	CHKiRet((*modGetKeepType)(&pNew->eKeepType));
 	dbgprintf("module of type %d being loaded.\n", pNew->eType);
 	
 	/* OK, we know we can successfully work with the module. So we now fill the
@@ -392,6 +450,11 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 	 */
 	CHKiRet((*pNew->modQueryEtryPt)((uchar*)"modGetID", &pNew->modGetID));
 	CHKiRet((*pNew->modQueryEtryPt)((uchar*)"modExit", &pNew->modExit));
+	localRet = (*pNew->modQueryEtryPt)((uchar*)"isCompatibleWithFeature", &pNew->isCompatibleWithFeature);
+	if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
+		pNew->isCompatibleWithFeature = dummyIsCompatibleWithFeature;
+	else if(localRet != RS_RET_OK)
+		ABORT_FINALIZE(localRet);
 
 	/* ... and now the module-specific interfaces */
 	switch(pNew->eType) {
@@ -406,24 +469,104 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"dbgPrintInstInfo", &pNew->dbgPrintInstInfo));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"doAction", &pNew->mod.om.doAction));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"parseSelectorAct", &pNew->mod.om.parseSelectorAct));
-			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"isCompatibleWithFeature", &pNew->isCompatibleWithFeature));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"tryResume", &pNew->tryResume));
 			/* try load optional interfaces */
 			localRet = (*pNew->modQueryEtryPt)((uchar*)"doHUP", &pNew->doHUP);
 			if(localRet != RS_RET_OK && localRet != RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
 				ABORT_FINALIZE(localRet);
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"beginTransaction", &pNew->mod.om.beginTransaction);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
+				pNew->mod.om.beginTransaction = dummyBeginTransaction;
+			else if(localRet != RS_RET_OK)
+				ABORT_FINALIZE(localRet);
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"endTransaction", &pNew->mod.om.endTransaction);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.om.endTransaction = dummyEndTransaction;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
 			break;
 		case eMOD_LIB:
+			break;
+		case eMOD_PARSER:
+			/* first, we need to obtain the parser object. We could not do that during
+			 * init as that would have caused class bootstrap issues which are not
+			 * absolutely necessary. Note that we can call objUse() multiple times, it
+			 * handles that.
+			 */
+			CHKiRet(objUse(parser, CORE_COMPONENT));
+			/* here, we create a new parser object */
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"parse", &pNew->mod.pm.parse));
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"GetParserName", &GetName));
+			CHKiRet(GetName(&pName));
+			CHKiRet(parser.Construct(&pParser));
+
+			/* check some features */
+			localRet = pNew->isCompatibleWithFeature(sFEATUREAutomaticSanitazion);
+			if(localRet == RS_RET_OK){
+				CHKiRet(parser.SetDoSanitazion(pParser, TRUE));
+			}
+			localRet = pNew->isCompatibleWithFeature(sFEATUREAutomaticPRIParsing);
+			if(localRet == RS_RET_OK){
+				CHKiRet(parser.SetDoPRIParsing(pParser, TRUE));
+			}
+
+			CHKiRet(parser.SetName(pParser, pName));
+			CHKiRet(parser.SetModPtr(pParser, pNew));
+			CHKiRet(parser.ConstructFinalize(pParser));
+			break;
+		case eMOD_STRGEN:
+			/* first, we need to obtain the strgen object. We could not do that during
+			 * init as that would have caused class bootstrap issues which are not
+			 * absolutely necessary. Note that we can call objUse() multiple times, it
+			 * handles that.
+			 */
+			CHKiRet(objUse(strgen, CORE_COMPONENT));
+			/* here, we create a new parser object */
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"strgen", &pNew->mod.sm.strgen));
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"GetName", &GetName));
+			CHKiRet(GetName(&pName));
+			CHKiRet(strgen.Construct(&pStrgen));
+			CHKiRet(strgen.SetName(pStrgen, pName));
+			CHKiRet(strgen.SetModPtr(pStrgen, pNew));
+			CHKiRet(strgen.ConstructFinalize(pStrgen));
 			break;
 	}
 
 	pNew->pszName = (uchar*) strdup((char*)name); /* we do not care if strdup() fails, we can accept that */
 	pNew->pModHdlr = pModHdlr;
 	/* TODO: take this from module */
-	if(pModHdlr == NULL)
+	if(pModHdlr == NULL) {
 		pNew->eLinkType = eMOD_LINK_STATIC;
-	else
+	} else {
 		pNew->eLinkType = eMOD_LINK_DYNAMIC_LOADED;
+
+		/* if we need to keep the linked module, save it */
+		if (pNew->eKeepType == eMOD_KEEP) {
+			/* see if we have this one already */
+			for (pHandle = pHandles; pHandle; pHandle = pHandle->next) {
+				if (!strcmp((char *)name, (char *)pHandle->pszName))
+					break;
+			}
+
+			/* not found, create it */
+			if (!pHandle) {
+				if((pHandle = malloc(sizeof (*pHandle))) == NULL) {
+					ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+				}
+				if((pHandle->pszName = (uchar*) strdup((char*)name)) == NULL) {
+					free(pHandle);
+					ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+				}
+				pHandle->pModHdlr = pModHdlr;
+				pHandle->next = pHandles;
+
+				pHandles = pHandle;
+			}
+		}
+	}
 
 	/* we initialized the structure, now let's add it to the linked list of modules */
 	addModToList(pNew);
@@ -461,14 +604,49 @@ static void modPrintList(void)
 		case eMOD_LIB:
 			dbgprintf("library");
 			break;
+		case eMOD_PARSER:
+			dbgprintf("parser");
+			break;
+		case eMOD_STRGEN:
+			dbgprintf("strgen");
+			break;
 		}
 		dbgprintf(" module.\n");
 		dbgprintf("Entry points:\n");
 		dbgprintf("\tqueryEtryPt:        0x%lx\n", (unsigned long) pMod->modQueryEtryPt);
-		dbgprintf("\tdoAction:           0x%lx\n", (unsigned long) pMod->mod.om.doAction);
-		dbgprintf("\tparseSelectorAct:   0x%lx\n", (unsigned long) pMod->mod.om.parseSelectorAct);
 		dbgprintf("\tdbgPrintInstInfo:   0x%lx\n", (unsigned long) pMod->dbgPrintInstInfo);
 		dbgprintf("\tfreeInstance:       0x%lx\n", (unsigned long) pMod->freeInstance);
+		switch(pMod->eType) {
+		case eMOD_OUT:
+			dbgprintf("Output Module Entry Points:\n");
+			dbgprintf("\tdoAction:           0x%lx\n", (unsigned long) pMod->mod.om.doAction);
+			dbgprintf("\tparseSelectorAct:   0x%lx\n", (unsigned long) pMod->mod.om.parseSelectorAct);
+			dbgprintf("\ttryResume:          0x%lx\n", (unsigned long) pMod->tryResume);
+			dbgprintf("\tdoHUP:              0x%lx\n", (unsigned long) pMod->doHUP);
+			dbgprintf("\tBeginTransaction:   0x%lx\n", (unsigned long)
+								   ((pMod->mod.om.beginTransaction == dummyBeginTransaction) ?
+								    0 :  pMod->mod.om.beginTransaction));
+			dbgprintf("\tEndTransaction:     0x%lx\n", (unsigned long)
+								   ((pMod->mod.om.endTransaction == dummyEndTransaction) ?
+								    0 :  pMod->mod.om.endTransaction));
+			break;
+		case eMOD_IN:
+			dbgprintf("Input Module Entry Points\n");
+			dbgprintf("\trunInput:           0x%lx\n", (unsigned long) pMod->mod.im.runInput);
+			dbgprintf("\twillRun:            0x%lx\n", (unsigned long) pMod->mod.im.willRun);
+			dbgprintf("\tafterRun:           0x%lx\n", (unsigned long) pMod->mod.im.afterRun);
+			break;
+		case eMOD_LIB:
+			break;
+		case eMOD_PARSER:
+			dbgprintf("Parser Module Entry Points\n");
+			dbgprintf("\tparse:              0x%lx\n", (unsigned long) pMod->mod.pm.parse);
+			break;
+		case eMOD_STRGEN:
+			dbgprintf("Strgen Module Entry Points\n");
+			dbgprintf("\tstrgen:            0x%lx\n", (unsigned long) pMod->mod.sm.strgen);
+			break;
+		}
 		dbgprintf("\n");
 		pMod = GetNxt(pMod); /* done, go next */
 	}
@@ -596,6 +774,7 @@ Load(uchar *pModName)
 	modInfo_t *pModInfo;
 	uchar *pModDirCurr, *pModDirNext;
 	int iLoadCnt;
+	struct dlhandle_s *pHandle = NULL;
 
 	assert(pModName != NULL);
 	dbgprintf("Requested to load module '%s'\n", pModName);
@@ -685,7 +864,20 @@ Load(uchar *pModName)
 
 		/* complete load path constructed, so ... GO! */
 		dbgprintf("loading module '%s'\n", szPath);
-		pModHdlr = dlopen((char *) szPath, RTLD_NOW);
+
+		/* see if we have this one already */
+		for (pHandle = pHandles; pHandle; pHandle = pHandle->next) {
+			if (!strcmp((char *)pModName, (char *)pHandle->pszName)) {
+				pModHdlr = pHandle->pModHdlr;
+				break;
+			}
+		}
+
+		/* not found, try to dynamically link it */
+		if (!pModHdlr) {
+			pModHdlr = dlopen((char *) szPath, RTLD_NOW);
+		}
+
 		iLoadCnt++;
 	
 	} while(pModHdlr == NULL && *pModName != '/' && pModDirNext);
@@ -807,6 +999,7 @@ BEGINObjClassExit(module, OBJ_IS_LOADABLE_MODULE) /* CHANGE class also in END MA
 CODESTARTObjClassExit(module)
 	/* release objects we no longer need */
 	objRelease(errmsg, CORE_COMPONENT);
+	objRelease(parser, CORE_COMPONENT);
 	/* We have a problem in our reference counting, which leads to this function
 	 * being called too early. This usually is no problem, but if we destroy
 	 * the mutex object, we get into trouble. So rather than finding the root cause,

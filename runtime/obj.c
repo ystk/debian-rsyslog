@@ -48,25 +48,23 @@
  *
  * File begun on 2008-01-04 by RGerhards
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 
@@ -90,6 +88,7 @@
 #include "cfsysline.h"
 #include "unicode-helper.h"
 #include "apc.h"
+#include "datetime.h"
 
 /* static data */
 DEFobjCurrIf(obj) /* we define our own interface, as this is expected by some macros! */
@@ -1129,7 +1128,7 @@ UseObj(char *srcFile, uchar *pObjName, uchar *pObjFile, interface_t *pIf)
 
 
 	/* DEV debug only: dbgprintf("source file %s requests object '%s', ifIsLoaded %d\n", srcFile, pObjName, pIf->ifIsLoaded); */
-	d_pthread_mutex_lock(&mutObjGlobalOp);
+	pthread_mutex_lock(&mutObjGlobalOp);
 
 	if(pIf->ifIsLoaded == 1) {
 		ABORT_FINALIZE(RS_RET_OK); /* we are already set */
@@ -1170,7 +1169,7 @@ UseObj(char *srcFile, uchar *pObjName, uchar *pObjFile, interface_t *pIf)
 	pIf->ifIsLoaded = 1; /* we are happy */
 
 finalize_it:
-	d_pthread_mutex_unlock(&mutObjGlobalOp);
+	pthread_mutex_unlock(&mutObjGlobalOp);
 
 	if(pStr != NULL)
 		rsCStrDestruct(&pStr);
@@ -1193,7 +1192,7 @@ ReleaseObj(char *srcFile, uchar *pObjName, uchar *pObjFile, interface_t *pIf)
 
 
 	/* dev debug only dbgprintf("source file %s releasing object '%s', ifIsLoaded %d\n", srcFile, pObjName, pIf->ifIsLoaded); */
-	d_pthread_mutex_lock(&mutObjGlobalOp);
+	pthread_mutex_lock(&mutObjGlobalOp);
 
 	if(pObjFile == NULL)
 		FINALIZE; /* if it is not a lodable module, we do not need to do anything... */
@@ -1214,7 +1213,7 @@ ReleaseObj(char *srcFile, uchar *pObjName, uchar *pObjFile, interface_t *pIf)
 	pIf->ifIsLoaded = 0; /* indicated "no longer valid" */
 
 finalize_it:
-	d_pthread_mutex_unlock(&mutObjGlobalOp);
+	pthread_mutex_unlock(&mutObjGlobalOp);
 
 	if(pStr != NULL)
 		rsCStrDestruct(&pStr);
@@ -1330,8 +1329,9 @@ objClassInit(modInfo_t *pModInfo)
 	CHKiRet(objGetObjInterface(&obj)); /* get ourselves ;) */
 
 	/* init classes we use (limit to as few as possible!) */
-	CHKiRet(apcClassInit(pModInfo));
 	CHKiRet(errmsgClassInit(pModInfo));
+	CHKiRet(datetimeClassInit(pModInfo));
+	CHKiRet(apcClassInit(pModInfo));
 	CHKiRet(cfsyslineInit());
 	CHKiRet(varClassInit(pModInfo));
 	CHKiRet(moduleClassInit(pModInfo));

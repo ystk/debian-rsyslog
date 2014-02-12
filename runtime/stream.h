@@ -102,12 +102,12 @@ typedef struct strm_s {
 	int64 iMaxFileSize;/* maximum size a file may grow to */
 	int iMaxFiles;	/* maximum number of files if a circular mode is in use */
 	int iFileNumDigits;/* min number of digits to use in file number (only in circular mode) */
-	bool bDeleteOnClose; /* set to 1 to auto-delete on close -- be careful with that setting! */
+	sbool bDeleteOnClose; /* set to 1 to auto-delete on close -- be careful with that setting! */
 	int64 iCurrOffs;/* current offset */
 	int64 *pUsrWCntr; /* NULL or a user-provided counter that receives the nbr of bytes written since the last CntrSet() */
 	/* dynamic properties, valid only during file open, not to be persistet */
-	bool bDisabled; /* should file no longer be written to? (currently set only if omfile file size limit fails) */
-	bool bSync;	/* sync this file after every write? */
+	sbool bDisabled; /* should file no longer be written to? (currently set only if omfile file size limit fails) */
+	sbool bSync;	/* sync this file after every write? */
 	size_t sIOBufSize;/* size of IO buffer */
 	uchar *pszDir; /* Directory */
 	int lenDir;
@@ -118,13 +118,13 @@ typedef struct strm_s {
 	size_t iBufPtrMax;	/* current max Ptr in Buffer (if partial read!) */
 	size_t iBufPtr;	/* pointer into current buffer */
 	int iUngetC;	/* char set via UngetChar() call or -1 if none set */
-	bool bInRecord;	/* if 1, indicates that we are currently writing a not-yet complete record */
+	sbool bInRecord;	/* if 1, indicates that we are currently writing a not-yet complete record */
 	int iZipLevel;	/* zip level (0..9). If 0, zip is completely disabled */
 	Bytef *pZipBuf;
 	/* support for async flush procesing */
-	bool bAsyncWrite;	/* do asynchronous writes (always if a flush interval is given) */
-	bool bStopWriter;	/* shall writer thread terminate? */
-	bool bDoTimedWait;	/* instruct writer thread to do a times wait to support flush timeouts */
+	sbool bAsyncWrite;	/* do asynchronous writes (always if a flush interval is given) */
+	sbool bStopWriter;	/* shall writer thread terminate? */
+	sbool bDoTimedWait;	/* instruct writer thread to do a times wait to support flush timeouts */
 	int iFlushInterval; /* flush in which interval - 0, no flushing */
 	apc_id_t apcID;    /* id of current Apc request (used for cancelling) */
 	pthread_mutex_t mut;/* mutex for flush in async mode */
@@ -143,7 +143,7 @@ typedef struct strm_s {
 	/* support for omfile size-limiting commands, special counters, NOT persisted! */
 	off_t	iSizeLimit;	/* file size limit, 0 = no limit */
 	uchar	*pszSizeLimitCmd;	/* command to carry out when size limit is reached */
-	bool	bIsTTY;		/* is this a tty file? */
+	sbool	bIsTTY;		/* is this a tty file? */
 } strm_t;
 
 
@@ -156,7 +156,6 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*SetFileName)(strm_t *pThis, uchar *pszName, size_t iLenName);
 	rsRetVal (*ReadChar)(strm_t *pThis, uchar *pC);
 	rsRetVal (*UnreadChar)(strm_t *pThis, uchar c);
-	rsRetVal (*ReadLine)(strm_t *pThis, cstr_t **ppCStr);
 	rsRetVal (*SeekCurrOffs)(strm_t *pThis);
 	rsRetVal (*Write)(strm_t *pThis, uchar *pBuf, size_t lenBuf);
 	rsRetVal (*WriteChar)(strm_t *pThis, uchar c);
@@ -169,6 +168,7 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*Serialize)(strm_t *pThis, strm_t *pStrm);
 	rsRetVal (*GetCurrOffset)(strm_t *pThis, int64 *pOffs);
 	rsRetVal (*SetWCntr)(strm_t *pThis, number_t *pWCnt);
+	rsRetVal (*Dup)(strm_t *pThis, strm_t **ppNew);
 	INTERFACEpropSetMeth(strm, bDeleteOnClose, int);
 	INTERFACEpropSetMeth(strm, iMaxFileSize, int);
 	INTERFACEpropSetMeth(strm, iMaxFiles, int);
@@ -182,8 +182,10 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	INTERFACEpropSetMeth(strm, iSizeLimit, off_t);
 	INTERFACEpropSetMeth(strm, iFlushInterval, int);
 	INTERFACEpropSetMeth(strm, pszSizeLimitCmd, uchar*);
+	/* v6 added */
+	rsRetVal (*ReadLine)(strm_t *pThis, cstr_t **ppCStr, int mode);
 ENDinterface(strm)
-#define strmCURR_IF_VERSION 2 /* increment whenever you change the interface structure! */
+#define strmCURR_IF_VERSION 6 /* increment whenever you change the interface structure! */
 
 
 /* prototypes */

@@ -48,6 +48,7 @@
 #include "dirty.h"
 #include "cfsysline.h"
 #include "module-template.h"
+#include "unicode-helper.h"
 #include "net.h"
 #include "srUtils.h"
 #include "gss-misc.h"
@@ -56,9 +57,12 @@
 #include "errmsg.h"
 #include "netstrm.h"
 #include "glbl.h"
+#include "debug.h"
+#include "unlimited_select.h"
 
 
 MODULE_TYPE_INPUT
+MODULE_TYPE_NOKEEP
 
 /* defines */
 #define ALLOWEDMETHOD_GSS 2
@@ -176,10 +180,10 @@ isPermittedHost(struct sockaddr *addr, char *fromHostFQDN, void *pUsrSrv, void*p
 	pGSess = (gss_sess_t*) pUsrSess;
 
 	if((pGSrv->allowedMethods & ALLOWEDMETHOD_TCP) &&
-	   net.isAllowedSender((uchar*)"TCP", addr, (char*)fromHostFQDN))
+	   net.isAllowedSender2((uchar*)"TCP", addr, (char*)fromHostFQDN, 1))
 		allowedMethods |= ALLOWEDMETHOD_TCP;
 	if((pGSrv->allowedMethods & ALLOWEDMETHOD_GSS) &&
-	   net.isAllowedSender((uchar*)"GSS", addr, (char*)fromHostFQDN))
+	   net.isAllowedSender2((uchar*)"GSS", addr, (char*)fromHostFQDN, 1))
 		allowedMethods |= ALLOWEDMETHOD_GSS;
 	if(allowedMethods && pGSess != NULL)
 		pGSess->allowedMethods = allowedMethods;
@@ -330,6 +334,7 @@ addGSSListener(void __attribute__((unused)) *pVal, uchar *pNewVal)
 		CHKiRet(tcpsrv.SetCBOnSessAccept(pOurTcpsrv, onSessAccept));
 		CHKiRet(tcpsrv.SetCBOnRegularClose(pOurTcpsrv, onRegularClose));
 		CHKiRet(tcpsrv.SetCBOnErrClose(pOurTcpsrv, onErrClose));
+		CHKiRet(tcpsrv.SetInputName(pOurTcpsrv, UCHAR_CONSTANT("imgssapi")));
 		tcpsrv.configureTCPListen(pOurTcpsrv, pNewVal);
 		CHKiRet(tcpsrv.ConstructFinalize(pOurTcpsrv));
 	}
@@ -407,22 +412,27 @@ OnSessAcceptGSS(tcpsrv_t *pThis, tcps_sess_t *pSess)
 		 */
 		char *buf;
 		int ret = 0;
-		CHKmalloc(buf = (char*) malloc(sizeof(char) * (glbl.GetMaxLine() + 1)));
+		CHKmalloc(buf = (char*) MALLOC(sizeof(char) * (glbl.GetMaxLine() + 1)));
 
 		dbgprintf("GSS-API Trying to accept TCP session %p\n", pSess);
 
 		CHKiRet(netstrm.GetSock(pSess->pStrm, &fdSess)); // TODO: method access!
 		if (allowedMethods & ALLOWEDMETHOD_TCP) {
 			int len;
-			fd_set  fds;
 			struct timeval tv;
+#ifdef USE_UNLIMITED_SELECT
+                        fd_set *pFds = malloc(glbl.GetFdSetSize());
+#else
+                        fd_set fds;
+                        fd_set *pFds = &fds;
+#endif
 		
 			do {
-				FD_ZERO(&fds);
-				FD_SET(fdSess, &fds);
+				FD_ZERO(pFds);
+				FD_SET(fdSess, pFds);
 				tv.tv_sec = 1;
 				tv.tv_usec = 0;
-				ret = select(fdSess + 1, &fds, NULL, NULL, &tv);
+				ret = select(fdSess + 1, pFds, NULL, NULL, &tv);
 			} while (ret < 0 && errno == EINTR);
 			if (ret < 0) {
 				errmsg.LogError(0, RS_RET_ERR, "TCP session %p will be closed, error ignored\n", pSess);
@@ -475,6 +485,8 @@ OnSessAcceptGSS(tcpsrv_t *pThis, tcps_sess_t *pSess)
 				pGSess->allowedMethods = ALLOWEDMETHOD_TCP;
 				ABORT_FINALIZE(RS_RET_OK); // TODO: define good error codes
 			}
+
+                        freeFdSet(pFds);
 		}
 
 		context = &pGSess->gss_context;
@@ -674,9 +686,17 @@ CODESTARTafterRun
 ENDafterRun
 
 
+BEGINisCompatibleWithFeature
+CODESTARTisCompatibleWithFeature
+	if(eFeat == sFEATURENonCancelInputTermination)
+		iRet = RS_RET_OK;
+ENDisCompatibleWithFeature
+
+
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_IMOD_QUERIES
+CODEqueryEtryPt_IsCompatibleWithFeature_IF_OMOD_QUERIES
 ENDqueryEtryPt
 
 

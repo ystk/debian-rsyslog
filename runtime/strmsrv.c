@@ -22,25 +22,23 @@
  * machine to a separate module which then is called via the DoCharRcvd() interface
  * of this class here. -- rgerhards, 2009-06-01
  *
- * Copyright 2007, 2008, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "config.h"
@@ -75,6 +73,7 @@
 #include "unicode-helper.h"
 
 MODULE_TYPE_LIB
+MODULE_TYPE_NOKEEP
 
 /* defines */
 #define STRMSESS_MAX_DEFAULT 200 /* default for nbr of strm sessions if no number is given */
@@ -165,7 +164,7 @@ addNewLstnPort(strmsrv_t *pThis, uchar *pszPort)
 	ISOBJ_TYPE_assert(pThis, strmsrv);
 
 	/* create entry */
-	CHKmalloc(pEntry = malloc(sizeof(strmLstnPortList_t)));
+	CHKmalloc(pEntry = MALLOC(sizeof(strmLstnPortList_t)));
 	pEntry->pszPort = pszPort;
 	pEntry->pSrv = pThis;
 	CHKmalloc(pEntry->pszInputName = ustrdup(pThis->pszInputName));
@@ -520,6 +519,7 @@ Run(strmsrv_t *pThis)
 	strms_sess_t *pNewSess;
 	nssel_t *pSel;
 	ssize_t iRcvd;
+	rsRetVal localRet;
 
 	ISOBJ_TYPE_assert(pThis, strmsrv);
 
@@ -579,11 +579,12 @@ Run(strmsrv_t *pThis)
 					break;
 				case RS_RET_OK:
 					/* valid data received, process it! */
-					if(strms_sess.DataRcvd(pThis->pSessions[iSTRMSess], buf, iRcvd) != RS_RET_OK) {
+					localRet = strms_sess.DataRcvd(pThis->pSessions[iSTRMSess], buf, iRcvd);
+					if(localRet != RS_RET_OK) {
 						/* in this case, something went awfully wrong.
 						 * We are instructed to terminate the session.
 						 */
-						errmsg.LogError(0, NO_ERRCODE, "Tearing down STRM Session %d - see "
+						errmsg.LogError(0, localRet, "Tearing down STRM Session %d - see "
 							    "previous messages for reason(s)\n", iSTRMSess);
 						pThis->pOnErrClose(pThis->pSessions[iSTRMSess]);
 						strms_sess.Destruct(&pThis->pSessions[iSTRMSess]);

@@ -5,7 +5,7 @@
 # added 2009-04-17 by Rgerhards
 # This file is part of the rsyslog project, released  under GPLv3
 # uncomment for debugging support:
-echo diskqueue.sh: testing queue disk-only mode
+echo \[diskqueue.sh\]: testing queue disk-only mode
 # uncomment for debugging support:
 #export RSYSLOG_DEBUG="debug nostdout noprintmutexaction"
 #export RSYSLOG_DEBUGLOG="log"

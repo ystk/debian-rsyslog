@@ -4,25 +4,23 @@
  *
  * Module begun 2009-06-10 by Rainer Gerhards
  *
- * Copyright 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #include "config.h"
@@ -39,8 +37,8 @@
 #include "vm.h"
 #include "var.h"
 #include "srUtils.h"
+#include "batch.h"
 #include "unicode-helper.h"
-#include "dirty.h" /* for getFIOPName */
 
 /* static data */
 DEFobjStaticHelpers
@@ -48,6 +46,35 @@ DEFobjCurrIf(errmsg)
 DEFobjCurrIf(expr)
 DEFobjCurrIf(var)
 DEFobjCurrIf(vm)
+
+
+/* support for simple textual representation of FIOP names
+ * rgerhards, 2005-09-27
+ */
+static char*
+getFIOPName(unsigned iFIOP)
+{
+	char *pRet;
+	switch(iFIOP) {
+		case FIOP_CONTAINS:
+			pRet = "contains";
+			break;
+		case FIOP_ISEQUAL:
+			pRet = "isequal";
+			break;
+		case FIOP_STARTSWITH:
+			pRet = "startswith";
+			break;
+		case FIOP_REGEX:
+			pRet = "regex";
+			break;
+		default:
+			pRet = "NOP";
+			break;
+	}
+	return pRet;
+}
+
 
 /* iterate over all actions, this is often needed, for example when HUP processing 
  * must be done or a shutdown is pending.
@@ -59,40 +86,20 @@ iterateAllActions(rule_t *pThis, rsRetVal (*pFunc)(void*, void*), void* pParam)
 }
 
 
-
 /* helper to processMsg(), used to call the configured actions. It is
  * executed from within llExecFunc() of the action list.
  * rgerhards, 2007-08-02
  */
-typedef struct processMsgDoActions_s {
-	int bPrevWasSuspended; /* was the previous action suspended? */
-	msg_t *pMsg;
-} processMsgDoActions_t;
-DEFFUNC_llExecFunc(processMsgDoActions)
+DEFFUNC_llExecFunc(processBatchDoActions)
 {
 	DEFiRet;
 	rsRetVal iRetMod;	/* return value of module - we do not always pass that back */
 	action_t *pAction = (action_t*) pData;
-	processMsgDoActions_t *pDoActData = (processMsgDoActions_t*) pParam;
+	batch_t *pBatch = (batch_t*) pParam;
 
-	assert(pAction != NULL);
+	DBGPRINTF("Processing next action\n");
+	iRetMod = pAction->submitToActQ(pAction, pBatch);
 
-	if((pAction->bExecWhenPrevSusp  == 1) && (pDoActData->bPrevWasSuspended == 0)) {
-		dbgprintf("not calling action because the previous one is not suspended\n");
-		ABORT_FINALIZE(RS_RET_OK);
-	}
-
-	iRetMod = actionCallAction(pAction, pDoActData->pMsg);
-	if(iRetMod == RS_RET_DISCARDMSG) {
-		ABORT_FINALIZE(RS_RET_DISCARDMSG);
-	} else if(iRetMod == RS_RET_SUSPENDED) {
-		/* indicate suspension for next module to be called */
-		pDoActData->bPrevWasSuspended = 1;
-	} else {
-		pDoActData->bPrevWasSuspended = 0;
-	}
-
-finalize_it:
 	RETiRet;
 }
 
@@ -101,7 +108,7 @@ finalize_it:
  * provided filter condition.
  */
 static rsRetVal
-shouldProcessThisMessage(rule_t *pRule, msg_t *pMsg, int *bProcessMsg)
+shouldProcessThisMessage(rule_t *pRule, msg_t *pMsg, sbool *bProcessMsg)
 {
 	DEFiRet;
 	unsigned short pbMustBeFreed;
@@ -164,7 +171,7 @@ shouldProcessThisMessage(rule_t *pRule, msg_t *pMsg, int *bProcessMsg)
 
 	if(pRule->f_filter_type == FILTER_PRI) {
 		/* skip messages that are incorrect priority */
-dbgprintf("testing filter, f_pmask %d\n", pRule->f_filterData.f_pmask[pMsg->iFacility]);
+		dbgprintf("testing filter, f_pmask %d\n", pRule->f_filterData.f_pmask[pMsg->iFacility]);
 		if ( (pRule->f_filterData.f_pmask[pMsg->iFacility] == TABLE_NOPRI) || \
 		    ((pRule->f_filterData.f_pmask[pMsg->iFacility] & (1<<pMsg->iSeverity)) == 0) )
 			bRet = 0;
@@ -176,7 +183,7 @@ dbgprintf("testing filter, f_pmask %d\n", pRule->f_filterData.f_pmask[pMsg->iFac
 		CHKiRet(vm.SetMsg(pVM, pMsg));
 		CHKiRet(vm.ExecProg(pVM, pRule->f_filterData.f_expr->pVmprg));
 		CHKiRet(vm.PopBoolFromStack(pVM, &pResult));
-		dbgprintf("result of expression evaluation: %lld\n", pResult->val.num);
+		dbgprintf("result of rainerscript filter evaluation: %lld\n", pResult->val.num);
 		/* VM is destructed on function exit */
 		bRet = (pResult->val.num) ? 1 : 0;
 	} else {
@@ -250,26 +257,34 @@ finalize_it:
 
 
 
-/* Process (consume) a received message. Calls the actions configured.
+/* Process (consume) a batch of messages. Calls the actions configured.
  * rgerhards, 2005-10-13
  */
 static rsRetVal
-processMsg(rule_t *pThis, msg_t *pMsg)
+processBatch(rule_t *pThis, batch_t *pBatch)
 {
-	int bProcessMsg;
-	processMsgDoActions_t DoActData;
+	int i;
+	rsRetVal localRet;
 	DEFiRet;
 
 	ISOBJ_TYPE_assert(pThis, rule);
-	assert(pMsg != NULL);
+	assert(pBatch != NULL);
 
-	/* first check the filters... */
-	CHKiRet(shouldProcessThisMessage(pThis, pMsg, &bProcessMsg));
-	if(bProcessMsg) {
-		DoActData.pMsg = pMsg;
-		DoActData.bPrevWasSuspended = 0;
-		CHKiRet(llExecFunc(&pThis->llActList, processMsgDoActions, (void*)&DoActData));
+	/* first check the filters and reset status variables */
+	for(i = 0 ; i < batchNumMsgs(pBatch) && !*(pBatch->pbShutdownImmediate) ; ++i) {
+		localRet = shouldProcessThisMessage(pThis, (msg_t*)(pBatch->pElem[i].pUsrp),
+						    &(pBatch->pElem[i].bFilterOK));
+		if(localRet != RS_RET_OK) {
+			DBGPRINTF("processBatch: iRet %d returned from shouldProcessThisMessage, "
+			          "ignoring message\n", localRet);
+			pBatch->pElem[i].bFilterOK = 0;
+		}
+		if(pBatch->pElem[i].bFilterOK) {
+			/* re-init only when actually needed (cache write cost!) */
+			pBatch->pElem[i].bPrevWasSuspended = 0;
+		}
 	}
+	CHKiRet(llExecFunc(&pThis->llActList, processBatchDoActions, pBatch));
 
 finalize_it:
 	RETiRet;
@@ -412,7 +427,7 @@ CODESTARTobjQueryInterface(rule)
 	pIf->DebugPrint = ruleDebugPrint;
 
 	pIf->IterateAllActions = iterateAllActions;
-	pIf->ProcessMsg = processMsg;
+	pIf->ProcessBatch = processBatch;
 	pIf->SetAssRuleset = setAssRuleset;
 	pIf->GetAssRuleset = getAssRuleset;
 finalize_it:

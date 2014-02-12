@@ -17,8 +17,8 @@ The Debian default configuration for rsyslog uses:
  $IncludeConfig /etc/rsyslog.d/*.conf
 
 That means, all configuration files in /etc/rsyslog.d/ with a .conf file
-extension are read by rsyslog. This allows to easily extend the rsyslog
-configuration (either by package maintainers or local administrators).
+extension are read by rsyslog. This way the rsyslog configuration can be
+extended easily (either by package maintainers or local administrators).
 
 
 Command line arguments, modules and compatibility levels

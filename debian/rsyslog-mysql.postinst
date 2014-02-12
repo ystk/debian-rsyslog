@@ -27,7 +27,7 @@ case "$1" in
     configure)
 	ucfr rsyslog-mysql /etc/rsyslog.d/mysql.conf
 
-	invoke-rc.d rsyslog reload
+	invoke-rc.d rsyslog restart
     ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

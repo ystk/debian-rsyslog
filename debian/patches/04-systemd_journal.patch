@@ -1,0 +1,19 @@
+Description: Update for systemd journal
+ The journal that was introduced in systemd v38 has replaced
+ systemd-kmsg-syslogd and systemd-stdout-bridge.
+ Stopping a non-existing service will generate a failure in newer
+ versions of systemd and since wheezy has systemd v44, it's best
+ to remove that ExecStartPre.
+Author: Michael Biebl <biebl@debian.org>
+Index: rsyslog/rsyslog.service.in
+===================================================================
+--- rsyslog.orig/rsyslog.service.in	2013-03-05 19:12:26.579631305 +0100
++++ rsyslog/rsyslog.service.in	2013-03-05 22:57:35.377856176 +0100
+@@ -2,7 +2,6 @@
+ Description=System Logging Service
+ 
+ [Service]
+-ExecStartPre=/bin/systemctl stop systemd-kmsg-syslogd.service
+ ExecStart=@sbindir@/rsyslogd -n -c5
+ Sockets=syslog.socket
+ StandardOutput=null

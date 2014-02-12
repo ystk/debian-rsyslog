@@ -36,41 +36,137 @@ host_triplet = @host@
 @ENABLE_TESTBENCH_TRUE@check_PROGRAMS = $(am__EXEEXT_1) \
 @ENABLE_TESTBENCH_TRUE@	ourtail$(EXEEXT) nettester$(EXEEXT) \
 @ENABLE_TESTBENCH_TRUE@	tcpflood$(EXEEXT) chkseq$(EXEEXT) \
-@ENABLE_TESTBENCH_TRUE@	randomgen$(EXEEXT)
-@ENABLE_TESTBENCH_TRUE@TESTS = $(am__EXEEXT_1) cfg.sh \
-@ENABLE_TESTBENCH_TRUE@	validation-run.sh imtcp-multiport.sh \
-@ENABLE_TESTBENCH_TRUE@	diskqueue.sh diskqueue-fsync.sh \
-@ENABLE_TESTBENCH_TRUE@	manytcp.sh sndrcv.sh sndrcv_gzip.sh \
-@ENABLE_TESTBENCH_TRUE@	asynwr_simple.sh asynwr_timeout.sh \
-@ENABLE_TESTBENCH_TRUE@	asynwr_small.sh asynwr_tinybuf.sh \
-@ENABLE_TESTBENCH_TRUE@	wr_large_async.sh wr_large_sync.sh \
-@ENABLE_TESTBENCH_TRUE@	asynwr_deadlock.sh asynwr_deadlock2.sh \
-@ENABLE_TESTBENCH_TRUE@	asynwr_deadlock4.sh gzipwr_large.sh \
-@ENABLE_TESTBENCH_TRUE@	gzipwr_large_dynfile.sh \
-@ENABLE_TESTBENCH_TRUE@	dynfile_invld_async.sh \
-@ENABLE_TESTBENCH_TRUE@	dynfile_invld_sync.sh \
-@ENABLE_TESTBENCH_TRUE@	dynfile_invalid2.sh complex1.sh \
-@ENABLE_TESTBENCH_TRUE@	queue-persist.sh pipeaction.sh \
-@ENABLE_TESTBENCH_TRUE@	$(am__append_1) $(am__append_2)
-@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_1 = omod-if-array.sh \
+@ENABLE_TESTBENCH_TRUE@	msleep$(EXEEXT) randomgen$(EXEEXT) \
+@ENABLE_TESTBENCH_TRUE@	diagtalker$(EXEEXT) uxsockrcvr$(EXEEXT) \
+@ENABLE_TESTBENCH_TRUE@	syslog_caller$(EXEEXT) \
+@ENABLE_TESTBENCH_TRUE@	syslog_inject$(EXEEXT) \
+@ENABLE_TESTBENCH_TRUE@	inputfilegen$(EXEEXT)
+@ENABLE_TESTBENCH_TRUE@TESTS = $(am__EXEEXT_1) cfg.sh $(am__append_1) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_2) $(am__append_3) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_4) $(am__append_5) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_6) $(am__append_7) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_8) $(am__append_9) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_10) $(am__append_11) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_12) $(am__append_13)
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_1 = \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	arrayqueue.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	da-mainmsg-q.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	validation-run.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imtcp-multiport.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	daqueue-persist.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	diskqueue.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	diskqueue-fsync.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	rulesetmultiqueue.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	manytcp.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	rsf_getenv.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imtcp_conndrop.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imtcp_addtlframedelim.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	sndrcv.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	sndrcv_failover.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	sndrcv_gzip.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	sndrcv_udp.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	sndrcv_udp_nonstdpt.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_simple.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_timeout.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_small.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_tinybuf.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	wr_large_async.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	wr_large_sync.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_deadlock.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_deadlock2.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	asynwr_deadlock4.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	gzipwr_large.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	gzipwr_large_dynfile.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	dynfile_invld_async.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	dynfile_invld_sync.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	dynfile_invalid2.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	complex1.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	queue-persist.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	pipeaction.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	execonlyonce.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	execonlywhenprevsuspended.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	execonlywhenprevsuspended2.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	execonlywhenprevsuspended3.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	execonlywhenprevsuspended4.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	pipe_noreader.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	dircreate_dflt.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	dircreate_off.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imuxsock_logger_root.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imuxsock_traillf_root.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	imuxsock_ccmiddle_root.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	discard-rptdmsg.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	discard-allmark.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	discard.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-async.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-double.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-basic.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-rptd.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-no-rptd.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	failover-no-basic.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	rcvr_fail_restore.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	linkedlistqueue.sh
+
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_2 = \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	discard-rptdmsg-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	discard-allmark-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	failover-basic-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	failover-rptd-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	failover-no-basic-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	failover-no-rptd-vg.sh \
+@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	tcp-msgreduc-vg.sh
+
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_3 = \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@	mysql-basic.sh \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@	mysql-asyn.sh 
+
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_OMLIBDBI_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_4 = \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_OMLIBDBI_TRUE@@ENABLE_TESTBENCH_TRUE@	libdbi-basic.sh \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_OMLIBDBI_TRUE@@ENABLE_TESTBENCH_TRUE@	libdbi-asyn.sh
+
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_5 = \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	mysql-basic-vg.sh \
+@ENABLE_MYSQL_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	mysql-asyn-vg.sh 
+
+@ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_6 = \
+@ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	manyptcp.sh \
+@ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	imptcp_large.sh \
+@ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	imptcp_addtlframedelim.sh \
+@ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	imptcp_conndrop.sh 
+
+
+# This test does not work on v5 as we keep DH params
+#TESTS += manytcp-too-few-tls.sh
+@ENABLE_OMUXSOCK_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_7 = uxsock_simple.sh
+@ENABLE_OMUDPSPOOF_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_8 = sndrcv_omudpspoof.sh \
+@ENABLE_OMUDPSPOOF_TRUE@@ENABLE_TESTBENCH_TRUE@	 sndrcv_omudpspoof_nonstdpt.sh
+
+@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_9 = omod-if-array.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 proprepltest.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 parsertest.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 timestamp.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 inputname.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 threadingmq.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 threadingmqaq.sh \
+@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 badqi.sh \
+@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 tabescape_dflt.sh \
+@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 tabescape_off.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 fieldtest.sh
 
-@ENABLE_EXTENDED_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_2 = random.sh 
+@ENABLE_IMDIAG_TRUE@@ENABLE_OMRULESET_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_10 = omruleset.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_OMRULESET_TRUE@@ENABLE_TESTBENCH_TRUE@	 omruleset-queue.sh
+
+@ENABLE_EXTENDED_TESTS_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_11 = random.sh 
+@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_12 = imfile-basic.sh
+@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_13 = imfile-basic-vg.sh
 subdir = tests
 DIST_COMMON = README $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
 	INSTALL
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/atomic_operations.m4 \
+	$(top_srcdir)/m4/atomic_operations_64bit.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
 	$(top_srcdir)/m4/ltsugar.m4 $(top_srcdir)/m4/ltversion.m4 \
-	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/m4/shave.m4 \
-	$(top_srcdir)/configure.ac
+	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(install_sh) -d
@@ -82,9 +178,21 @@ CONFIG_CLEAN_VPATH_FILES =
 am_chkseq_OBJECTS = chkseq.$(OBJEXT)
 chkseq_OBJECTS = $(am_chkseq_OBJECTS)
 chkseq_LDADD = $(LDADD)
+AM_V_lt = $(am__v_lt_$(V))
+am__v_lt_ = $(am__v_lt_$(AM_DEFAULT_VERBOSITY))
+am__v_lt_0 = --silent
+am_diagtalker_OBJECTS = diagtalker.$(OBJEXT)
+diagtalker_OBJECTS = $(am_diagtalker_OBJECTS)
+am__DEPENDENCIES_1 =
+diagtalker_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_inputfilegen_OBJECTS = inputfilegen.$(OBJEXT)
+inputfilegen_OBJECTS = $(am_inputfilegen_OBJECTS)
+inputfilegen_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_msleep_OBJECTS = msleep.$(OBJEXT)
+msleep_OBJECTS = $(am_msleep_OBJECTS)
+msleep_LDADD = $(LDADD)
 am_nettester_OBJECTS = nettester.$(OBJEXT) getline.$(OBJEXT)
 nettester_OBJECTS = $(am_nettester_OBJECTS)
-am__DEPENDENCIES_1 =
 nettester_DEPENDENCIES = $(am__DEPENDENCIES_1)
 am_ourtail_OBJECTS = ourtail.$(OBJEXT)
 ourtail_OBJECTS = $(am_ourtail_OBJECTS)
@@ -98,42 +206,67 @@ am_rscript_OBJECTS = rscript-rscript.$(OBJEXT) \
 rscript_OBJECTS = $(am_rscript_OBJECTS)
 rscript_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
 	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
-rscript_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
-	--mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(rscript_LDFLAGS) \
-	$(LDFLAGS) -o $@
+rscript_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+	$(rscript_LDFLAGS) $(LDFLAGS) -o $@
 am__objects_2 = rt_init-runtime-dummy.$(OBJEXT)
 am_rt_init_OBJECTS = rt_init-rt-init.$(OBJEXT) $(am__objects_2)
 rt_init_OBJECTS = $(am_rt_init_OBJECTS)
 rt_init_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1) \
 	$(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
-rt_init_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
-	--mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(rt_init_LDFLAGS) \
-	$(LDFLAGS) -o $@
-am_tcpflood_OBJECTS = tcpflood.$(OBJEXT)
+rt_init_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+	$(rt_init_LDFLAGS) $(LDFLAGS) -o $@
+am_syslog_caller_OBJECTS = syslog_caller.$(OBJEXT)
+syslog_caller_OBJECTS = $(am_syslog_caller_OBJECTS)
+syslog_caller_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_syslog_inject_OBJECTS = syslog_inject.$(OBJEXT)
+syslog_inject_OBJECTS = $(am_syslog_inject_OBJECTS)
+syslog_inject_DEPENDENCIES = $(am__DEPENDENCIES_1)
+am_tcpflood_OBJECTS = tcpflood-tcpflood.$(OBJEXT)
 tcpflood_OBJECTS = $(am_tcpflood_OBJECTS)
-tcpflood_DEPENDENCIES = $(am__DEPENDENCIES_1)
+tcpflood_DEPENDENCIES = $(am__DEPENDENCIES_1) $(am__DEPENDENCIES_1)
+am_uxsockrcvr_OBJECTS = uxsockrcvr.$(OBJEXT)
+uxsockrcvr_OBJECTS = $(am_uxsockrcvr_OBJECTS)
+uxsockrcvr_DEPENDENCIES = $(am__DEPENDENCIES_1)
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__depfiles_maybe = depfiles
 am__mv = mv -f
 COMPILE = $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) \
 	$(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
-LTCOMPILE = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
-	--mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) \
-	$(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
+LTCOMPILE = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) \
+	$(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) \
+	$(AM_CFLAGS) $(CFLAGS)
+AM_V_CC = $(am__v_CC_$(V))
+am__v_CC_ = $(am__v_CC_$(AM_DEFAULT_VERBOSITY))
+am__v_CC_0 = @echo "  CC    " $@;
+AM_V_at = $(am__v_at_$(V))
+am__v_at_ = $(am__v_at_$(AM_DEFAULT_VERBOSITY))
+am__v_at_0 = @
 CCLD = $(CC)
-LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
-	--mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) \
-	$(LDFLAGS) -o $@
-SOURCES = $(chkseq_SOURCES) $(nettester_SOURCES) $(ourtail_SOURCES) \
-	$(randomgen_SOURCES) $(rscript_SOURCES) $(rt_init_SOURCES) \
-	$(tcpflood_SOURCES)
-DIST_SOURCES = $(chkseq_SOURCES) $(nettester_SOURCES) \
+LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+	$(AM_LDFLAGS) $(LDFLAGS) -o $@
+AM_V_CCLD = $(am__v_CCLD_$(V))
+am__v_CCLD_ = $(am__v_CCLD_$(AM_DEFAULT_VERBOSITY))
+am__v_CCLD_0 = @echo "  CCLD  " $@;
+AM_V_GEN = $(am__v_GEN_$(V))
+am__v_GEN_ = $(am__v_GEN_$(AM_DEFAULT_VERBOSITY))
+am__v_GEN_0 = @echo "  GEN   " $@;
+SOURCES = $(chkseq_SOURCES) $(diagtalker_SOURCES) \
+	$(inputfilegen_SOURCES) $(msleep_SOURCES) $(nettester_SOURCES) \
 	$(ourtail_SOURCES) $(randomgen_SOURCES) $(rscript_SOURCES) \
-	$(rt_init_SOURCES) $(tcpflood_SOURCES)
-JAVAC = javac
-CLASSPATH_ENV = CLASSPATH=$(JAVAROOT):$(srcdir)/$(JAVAROOT):$$CLASSPATH
-JAVAROOT = $(top_builddir)
+	$(rt_init_SOURCES) $(syslog_caller_SOURCES) \
+	$(syslog_inject_SOURCES) $(tcpflood_SOURCES) \
+	$(uxsockrcvr_SOURCES)
+DIST_SOURCES = $(chkseq_SOURCES) $(diagtalker_SOURCES) \
+	$(inputfilegen_SOURCES) $(msleep_SOURCES) $(nettester_SOURCES) \
+	$(ourtail_SOURCES) $(randomgen_SOURCES) $(rscript_SOURCES) \
+	$(rt_init_SOURCES) $(syslog_caller_SOURCES) \
+	$(syslog_inject_SOURCES) $(tcpflood_SOURCES) \
+	$(uxsockrcvr_SOURCES)
 ETAGS = etags
 CTAGS = ctags
 am__tty_colors = \
@@ -141,7 +274,7 @@ red=; grn=; lgn=; blu=; std=
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 ACLOCAL = @ACLOCAL@
 AMTAR = @AMTAR@
-AM_MAKEFLAGS = @AM_MAKEFLAGS@
+AM_DEFAULT_VERBOSITY = @AM_DEFAULT_VERBOSITY@
 AR = @AR@
 AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
@@ -152,7 +285,6 @@ CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
-CXX = @CXX@
 CYGPATH_W = @CYGPATH_W@
 DEFS = @DEFS@
 DEPDIR = @DEPDIR@
@@ -164,8 +296,6 @@ ECHO_N = @ECHO_N@
 ECHO_T = @ECHO_T@
 EGREP = @EGREP@
 EXEEXT = @EXEEXT@
-F77 = @F77@
-FC = @FC@
 FGREP = @FGREP@
 GNUTLS_CFLAGS = @GNUTLS_CFLAGS@
 GNUTLS_LIBS = @GNUTLS_LIBS@
@@ -175,6 +305,7 @@ HAVE_JAVAC = @HAVE_JAVAC@
 HAVE_MYSQL_CONFIG = @HAVE_MYSQL_CONFIG@
 HAVE_ORACLE_CONFIG = @HAVE_ORACLE_CONFIG@
 HAVE_PGSQL_CONFIG = @HAVE_PGSQL_CONFIG@
+IMUDP_LIBS = @IMUDP_LIBS@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -192,14 +323,12 @@ LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
-MAKEFLAGS = @MAKEFLAGS@
 MAKEINFO = @MAKEINFO@
 MKDIR_P = @MKDIR_P@
 MYSQL_CFLAGS = @MYSQL_CFLAGS@
 MYSQL_LIBS = @MYSQL_LIBS@
 NM = @NM@
 NMEDIT = @NMEDIT@
-OBJC = @OBJC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
 ORACLE_CFLAGS = @ORACLE_CFLAGS@
@@ -217,9 +346,10 @@ PATH_SEPARATOR = @PATH_SEPARATOR@
 PGSQL_CFLAGS = @PGSQL_CFLAGS@
 PGSQL_LIBS = @PGSQL_LIBS@
 PKG_CONFIG = @PKG_CONFIG@
+PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
+PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
 PTHREADS_CFLAGS = @PTHREADS_CFLAGS@
 PTHREADS_LIBS = @PTHREADS_LIBS@
-Q = @Q@
 RANLIB = @RANLIB@
 RELP_CFLAGS = @RELP_CFLAGS@
 RELP_LIBS = @RELP_LIBS@
@@ -233,7 +363,8 @@ SNMP_CFLAGS = @SNMP_CFLAGS@
 SNMP_LIBS = @SNMP_LIBS@
 SOL_LIBS = @SOL_LIBS@
 STRIP = @STRIP@
-V = @V@
+UDPSPOOF_CFLAGS = @UDPSPOOF_CFLAGS@
+UDPSPOOF_LIBS = @UDPSPOOF_LIBS@
 VERSION = @VERSION@
 ZLIB_LIBS = @ZLIB_LIBS@
 abs_builddir = @abs_builddir@
@@ -259,6 +390,7 @@ datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
 exec_prefix = @exec_prefix@
+have_valgrind = @have_valgrind@
 host = @host@
 host_alias = @host_alias@
 host_cpu = @host_cpu@
@@ -272,7 +404,6 @@ libdir = @libdir@
 libexecdir = @libexecdir@
 localedir = @localedir@
 localstatedir = @localstatedir@
-lt_ECHO = @lt_ECHO@
 mandir = @mandir@
 mkdir_p = @mkdir_p@
 moddirs = @moddirs@
@@ -283,17 +414,16 @@ program_transform_name = @program_transform_name@
 psdir = @psdir@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
-shavedir = @shavedir@
 srcdir = @srcdir@
 sysconfdir = @sysconfdir@
+systemdsystemunitdir = @systemdsystemunitdir@
 target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 @ENABLE_TESTBENCH_TRUE@TESTRUNS = rt_init rscript
-@ENABLE_TESTBENCH_TRUE@check_JAVA = DiagTalker.java
 TESTS_ENVIRONMENT = RSYSLOG_MODDIR='$(abs_top_builddir)'/runtime/.libs/
-DISTCLEANFILES = rsyslog.pid '$(abs_top_builddir)'/DiagTalker.class
+DISTCLEANFILES = rsyslog.pid
 test_files = testbench.h runtime-dummy.c
 EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   validation-run.sh \
@@ -335,11 +465,17 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/master.tspgsql \
 	   testsuites/subsecond.conf \
 	   testsuites/master.subsecond \
+	   testsuites/parse_8bit_escape.conf \
+	   testsuites/8bit.parse_8bit_escape \
 	   testsuites/parse1.conf \
 	   testsuites/field1.conf \
 	   testsuites/1.parse1 \
 	   testsuites/2.parse1 \
 	   testsuites/3.parse1 \
+	   testsuites/4.parse1 \
+	   testsuites/mark.parse1 \
+	   testsuites/8bit.parse1 \
+	   testsuites/empty.parse1 \
 	   testsuites/snare.parse1 \
 	   testsuites/oversizeTag-1.parse1 \
 	   testsuites/weird.parse1 \
@@ -353,6 +489,10 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/rfc5424-2.parse1 \
 	   testsuites/rfc5424-3.parse1 \
 	   testsuites/rfc5424-4.parse1 \
+	   testsuites/malformed1.parse1 \
+	   testsuites/reallife.parse1 \
+	   testsuites/parse2.conf \
+	   testsuites/reallife.parse2 \
 	   testsuites/parse3.conf \
 	   testsuites/reallife.parse3 \
 	   testsuites/parse-nodate.conf \
@@ -371,23 +511,74 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   killrsyslog.sh \
 	   parsertest.sh \
 	   fieldtest.sh \
+	   rsf_getenv.sh \
+	   testsuites/rsf_getenv.conf \
 	   diskqueue.sh \
 	   testsuites/diskqueue.conf \
+	   arrayqueue.sh \
+	   testsuites/arrayqueue.conf \
+	   linkedlistqueue.sh \
+	   testsuites/linkedlistqueue.conf \
+	   da-mainmsg-q.sh \
+	   testsuites/da-mainmsg-q.conf \
 	   diskqueue-fsync.sh \
 	   testsuites/diskqueue-fsync.conf \
 	   imtcp-multiport.sh \
 	   testsuites/imtcp-multiport.conf \
 	   manytcp.sh \
 	   testsuites/manytcp.conf \
+	   manyptcp.sh \
+	   testsuites/manyptcp.conf \
+	   imptcp_large.sh \
+	   testsuites/imptcp_large.conf \
+	   imptcp_addtlframedelim.sh \
+	   testsuites/imptcp_addtlframedelim.conf \
+	   imptcp_conndrop.sh \
+	   testsuites/imptcp_conndrop.conf \
+	   imtcp_conndrop.sh \
+	   testsuites/imtcp_conndrop.conf \
+	   imtcp_addtlframedelim.sh \
+	   testsuites/imtcp_addtlframedelim.conf \
+	   tcp-msgreduc-vg.sh \
+	   testsuites/./tcp-msgreduc-vg.conf \
 	   inputname.sh \
 	   testsuites/inputname_imtcp.conf \
 	   testsuites/1.inputname_imtcp_12514 \
 	   testsuites/1.inputname_imtcp_12515 \
 	   testsuites/1.inputname_imtcp_12516 \
 	   omod-if-array.sh \
+	   discard.sh \
+	   testsuites/discard.conf \
+	   failover-no-rptd.sh \
+	   failover-no-rptd-vg.sh \
+	   testsuites/failover-no-rptd.conf \
+	   failover-no-basic.sh \
+	   failover-no-basic-vg.sh \
+	   testsuites/failover-no-basic.conf \
+	   failover-rptd.sh \
+	   failover-rptd-vg.sh \
+	   testsuites/failover-rptd.conf \
+	   failover-basic.sh \
+	   failover-basic-vg.sh \
+	   testsuites/failover-basic.conf \
+	   failover-async.sh \
+	   testsuites/failover-async.conf \
+	   failover-double.sh \
+	   testsuites/failover-double.conf \
+	   discard-rptdmsg.sh \
+	   discard-rptdmsg-vg.sh \
+	   testsuites/discard-rptdmsg.conf \
+	   discard-allmark.sh \
+	   discard-allmark-vg.sh \
+	   testsuites/discard-allmark.conf \
 	   diag.sh \
 	   testsuites/diag-common.conf \
 	   testsuites/diag-common2.conf \
+           rcvr_fail_restore.sh \
+	   testsuites/rcvr_fail_restore_rcvr.conf \
+	   testsuites/rcvr_fail_restore_sender.conf \
+           daqueue-persist.sh \
+	   daqueue-persist-drvr.sh \
 	   queue-persist.sh \
 	   queue-persist-drvr.sh \
 	   testsuites/queue-persist.conf \
@@ -396,14 +587,34 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   threadingmqaq.sh \
 	   testsuites/threadingmqaq.conf \
 	   sndrcv_drvr.sh \
+	   sndrcv_drvr_noexit.sh \
+	   sndrcv_failover.sh \
+	   testsuites/sndrcv_failover_sender.conf \
+	   testsuites/sndrcv_failover_rcvr.conf \
 	   sndrcv.sh \
 	   testsuites/sndrcv_sender.conf \
 	   testsuites/sndrcv_rcvr.conf \
+	   sndrcv_udp.sh \
+	   testsuites/sndrcv_udp_sender.conf \
+	   testsuites/sndrcv_udp_rcvr.conf \
+	   sndrcv_udp_nonstdpt.sh \
+	   testsuites/sndrcv_udp_nonstdpt_sender.conf \
+	   testsuites/sndrcv_udp_nonstdpt_rcvr.conf \
+	   sndrcv_omudpspoof.sh \
+	   testsuites/sndrcv_omudpspoof_sender.conf \
+	   testsuites/sndrcv_omudpspoof_rcvr.conf \
+	   sndrcv_omudpspoof_nonstdpt.sh \
+	   testsuites/sndrcv_omudpspoof_nonstdpt_sender.conf \
+	   testsuites/sndrcv_omudpspoof_nonstdpt_rcvr.conf \
 	   sndrcv_gzip.sh \
 	   testsuites/sndrcv_gzip_sender.conf \
 	   testsuites/sndrcv_gzip_rcvr.conf \
 	   pipeaction.sh \
 	   testsuites/pipeaction.conf \
+	   pipe_noreader.sh \
+	   testsuites/pipe_noreader.conf \
+	   uxsock_simple.sh \
+	   testsuites/uxsock_simple.conf \
 	   asynwr_simple.sh \
 	   testsuites/asynwr_simple.conf \
 	   asynwr_timeout.sh \
@@ -430,6 +641,9 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/complex1.conf \
 	   random.sh \
 	   testsuites/random.conf \
+	   imfile-basic.sh \
+	   imfile-basic-vg.sh \
+	   testsuites/imfile-basic.conf \
 	   dynfile_invld_async.sh \
 	   dynfile_invld_sync.sh \
 	   dynfile_cachemiss.sh \
@@ -441,18 +655,77 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/master.rfctag \
 	   testsuites/nolimittag.conf \
 	   testsuites/master.nolimittag \
+	   rulesetmultiqueue.sh \
+	   testsuites/rulesetmultiqueue.conf \
+	   omruleset.sh \
+	   testsuites/omruleset.conf \
+	   omruleset-queue.sh \
+	   testsuites/omruleset-queue.conf \
+	   badqi.sh \
+	   testsuites/badqi.conf \
+	   bad_qi/dbq.qi \
 	   execonlyonce.sh \
 	   testsuites/execonlyonce.conf \
 	   testsuites/execonlyonce.data \
-	   DiagTalker.java \
+	   execonlywhenprevsuspended.sh \
+	   testsuites/execonlywhenprevsuspended.conf \
+	   execonlywhenprevsuspended2.sh \
+	   testsuites/execonlywhenprevsuspended2.conf \
+	   execonlywhenprevsuspended3.sh \
+	   testsuites/execonlywhenprevsuspended3.conf \
+	   execonlywhenprevsuspended4.sh \
+	   testsuites/execonlywhenprevsuspended4.conf \
+	   tabescape_dflt.sh \
+	   testsuites/tabescape_dflt.conf \
+	   testsuites/1.tabescape_dflt \
+	   tabescape_off.sh \
+	   testsuites/tabescape_off.conf \
+	   testsuites/1.tabescape_off \
+	   dircreate_dflt.sh \
+	   testsuites/dircreate_dflt.conf \
+	   dircreate_off.sh \
+	   testsuites/dircreate_off.conf \
+	   imuxsock_logger_root.sh \
+	   testsuites/imuxsock_logger_root.conf \
+	   resultdata/imuxsock_logger.log \
+	   imuxsock_traillf_root.sh \
+	   testsuites/imuxsock_traillf_root.conf \
+	   resultdata/imuxsock_traillf.log \
+	   imuxsock_ccmiddle_root.sh \
+	   testsuites/imuxsock_ccmiddle_root.conf \
+	   resultdata/imuxsock_ccmiddle.log \
+	   testsuites/mysql-truncate.sql \
+	   testsuites/mysql-select-msg.sql \
+	   libdbi-basic.sh \
+	   testsuites/libdbi-basic.conf \
+	   libdbi-asyn.sh \
+	   testsuites/libdbi-asyn.conf \
+	   mysql-basic.sh \
+	   mysql-basic-vg.sh \
+	   testsuites/mysql-basic.conf \
+	   mysql-asyn.sh \
+	   mysql-asyn-vg.sh \
+	   testsuites/mysql-asyn.conf \
 	   cfg.sh
 
 ourtail_SOURCES = ourtail.c
+msleep_SOURCES = msleep.c
 chkseq_SOURCES = chkseq.c
+uxsockrcvr_SOURCES = uxsockrcvr.c
+uxsockrcvr_LDADD = $(SOL_LIBS)
 tcpflood_SOURCES = tcpflood.c
-tcpflood_LDADD = $(SOL_LIBS)
+tcpflood_CPPFLAGS = $(PTHREADS_CFLAGS)
+tcpflood_LDADD = $(SOL_LIBS) $(PTHREADS_LIBS)
+syslog_caller_SOURCES = syslog_caller.c
+syslog_caller_LDADD = $(SOL_LIBS)
+syslog_inject_SOURCES = syslog_inject.c
+syslog_inject_LDADD = $(SOL_LIBS)
+diagtalker_SOURCES = diagtalker.c
+diagtalker_LDADD = $(SOL_LIBS)
 randomgen_SOURCES = randomgen.c
 randomgen_LDADD = $(SOL_LIBS)
+inputfilegen_SOURCES = inputfilegen.c
+inputfilegen_LDADD = $(SOL_LIBS)
 nettester_SOURCES = nettester.c getline.c
 nettester_LDADD = $(SOL_LIBS)
 rt_init_SOURCES = rt-init.c $(test_files)
@@ -508,25 +781,43 @@ clean-checkPROGRAMS:
 	rm -f $$list
 chkseq$(EXEEXT): $(chkseq_OBJECTS) $(chkseq_DEPENDENCIES) 
 	@rm -f chkseq$(EXEEXT)
-	$(LINK) $(chkseq_OBJECTS) $(chkseq_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(chkseq_OBJECTS) $(chkseq_LDADD) $(LIBS)
+diagtalker$(EXEEXT): $(diagtalker_OBJECTS) $(diagtalker_DEPENDENCIES) 
+	@rm -f diagtalker$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(diagtalker_OBJECTS) $(diagtalker_LDADD) $(LIBS)
+inputfilegen$(EXEEXT): $(inputfilegen_OBJECTS) $(inputfilegen_DEPENDENCIES) 
+	@rm -f inputfilegen$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(inputfilegen_OBJECTS) $(inputfilegen_LDADD) $(LIBS)
+msleep$(EXEEXT): $(msleep_OBJECTS) $(msleep_DEPENDENCIES) 
+	@rm -f msleep$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(msleep_OBJECTS) $(msleep_LDADD) $(LIBS)
 nettester$(EXEEXT): $(nettester_OBJECTS) $(nettester_DEPENDENCIES) 
 	@rm -f nettester$(EXEEXT)
-	$(LINK) $(nettester_OBJECTS) $(nettester_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(nettester_OBJECTS) $(nettester_LDADD) $(LIBS)
 ourtail$(EXEEXT): $(ourtail_OBJECTS) $(ourtail_DEPENDENCIES) 
 	@rm -f ourtail$(EXEEXT)
-	$(LINK) $(ourtail_OBJECTS) $(ourtail_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(ourtail_OBJECTS) $(ourtail_LDADD) $(LIBS)
 randomgen$(EXEEXT): $(randomgen_OBJECTS) $(randomgen_DEPENDENCIES) 
 	@rm -f randomgen$(EXEEXT)
-	$(LINK) $(randomgen_OBJECTS) $(randomgen_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(randomgen_OBJECTS) $(randomgen_LDADD) $(LIBS)
 rscript$(EXEEXT): $(rscript_OBJECTS) $(rscript_DEPENDENCIES) 
 	@rm -f rscript$(EXEEXT)
-	$(rscript_LINK) $(rscript_OBJECTS) $(rscript_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(rscript_LINK) $(rscript_OBJECTS) $(rscript_LDADD) $(LIBS)
 rt_init$(EXEEXT): $(rt_init_OBJECTS) $(rt_init_DEPENDENCIES) 
 	@rm -f rt_init$(EXEEXT)
-	$(rt_init_LINK) $(rt_init_OBJECTS) $(rt_init_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(rt_init_LINK) $(rt_init_OBJECTS) $(rt_init_LDADD) $(LIBS)
+syslog_caller$(EXEEXT): $(syslog_caller_OBJECTS) $(syslog_caller_DEPENDENCIES) 
+	@rm -f syslog_caller$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(syslog_caller_OBJECTS) $(syslog_caller_LDADD) $(LIBS)
+syslog_inject$(EXEEXT): $(syslog_inject_OBJECTS) $(syslog_inject_DEPENDENCIES) 
+	@rm -f syslog_inject$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(syslog_inject_OBJECTS) $(syslog_inject_LDADD) $(LIBS)
 tcpflood$(EXEEXT): $(tcpflood_OBJECTS) $(tcpflood_DEPENDENCIES) 
 	@rm -f tcpflood$(EXEEXT)
-	$(LINK) $(tcpflood_OBJECTS) $(tcpflood_LDADD) $(LIBS)
+	$(AM_V_CCLD)$(LINK) $(tcpflood_OBJECTS) $(tcpflood_LDADD) $(LIBS)
+uxsockrcvr$(EXEEXT): $(uxsockrcvr_OBJECTS) $(uxsockrcvr_DEPENDENCIES) 
+	@rm -f uxsockrcvr$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(uxsockrcvr_OBJECTS) $(uxsockrcvr_LDADD) $(LIBS)
 
 mostlyclean-compile:
 	-rm -f *.$(OBJEXT)
@@ -535,7 +826,10 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/chkseq.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/diagtalker.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/getline.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/inputfilegen.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/msleep.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/nettester.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ourtail.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/randomgen.Po@am__quote@
@@ -544,118 +838,136 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/rscript-runtime-dummy.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/rt_init-rt-init.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/rt_init-runtime-dummy.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tcpflood.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/syslog_caller.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/syslog_inject.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tcpflood-tcpflood.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/uxsockrcvr.Po@am__quote@
 
 .c.o:
-@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(COMPILE) -c $<
 
 .c.obj:
-@am__fastdepCC_TRUE@	$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ `$(CYGPATH_W) '$<'`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(COMPILE) -c `$(CYGPATH_W) '$<'`
 
 .c.lo:
-@am__fastdepCC_TRUE@	$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LTCOMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/$*.Tpo $(DEPDIR)/$*.Plo
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LTCOMPILE) -c -o $@ $<
 
 rscript-rscript.o: rscript.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-rscript.o -MD -MP -MF $(DEPDIR)/rscript-rscript.Tpo -c -o rscript-rscript.o `test -f 'rscript.c' || echo '$(srcdir)/'`rscript.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-rscript.Tpo $(DEPDIR)/rscript-rscript.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-rscript.o -MD -MP -MF $(DEPDIR)/rscript-rscript.Tpo -c -o rscript-rscript.o `test -f 'rscript.c' || echo '$(srcdir)/'`rscript.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-rscript.Tpo $(DEPDIR)/rscript-rscript.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='rscript.c' object='rscript-rscript.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-rscript.o `test -f 'rscript.c' || echo '$(srcdir)/'`rscript.c
 
 rscript-rscript.obj: rscript.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-rscript.obj -MD -MP -MF $(DEPDIR)/rscript-rscript.Tpo -c -o rscript-rscript.obj `if test -f 'rscript.c'; then $(CYGPATH_W) 'rscript.c'; else $(CYGPATH_W) '$(srcdir)/rscript.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-rscript.Tpo $(DEPDIR)/rscript-rscript.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-rscript.obj -MD -MP -MF $(DEPDIR)/rscript-rscript.Tpo -c -o rscript-rscript.obj `if test -f 'rscript.c'; then $(CYGPATH_W) 'rscript.c'; else $(CYGPATH_W) '$(srcdir)/rscript.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-rscript.Tpo $(DEPDIR)/rscript-rscript.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='rscript.c' object='rscript-rscript.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-rscript.obj `if test -f 'rscript.c'; then $(CYGPATH_W) 'rscript.c'; else $(CYGPATH_W) '$(srcdir)/rscript.c'; fi`
 
 rscript-getline.o: getline.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-getline.o -MD -MP -MF $(DEPDIR)/rscript-getline.Tpo -c -o rscript-getline.o `test -f 'getline.c' || echo '$(srcdir)/'`getline.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-getline.Tpo $(DEPDIR)/rscript-getline.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-getline.o -MD -MP -MF $(DEPDIR)/rscript-getline.Tpo -c -o rscript-getline.o `test -f 'getline.c' || echo '$(srcdir)/'`getline.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-getline.Tpo $(DEPDIR)/rscript-getline.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='getline.c' object='rscript-getline.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-getline.o `test -f 'getline.c' || echo '$(srcdir)/'`getline.c
 
 rscript-getline.obj: getline.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-getline.obj -MD -MP -MF $(DEPDIR)/rscript-getline.Tpo -c -o rscript-getline.obj `if test -f 'getline.c'; then $(CYGPATH_W) 'getline.c'; else $(CYGPATH_W) '$(srcdir)/getline.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-getline.Tpo $(DEPDIR)/rscript-getline.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-getline.obj -MD -MP -MF $(DEPDIR)/rscript-getline.Tpo -c -o rscript-getline.obj `if test -f 'getline.c'; then $(CYGPATH_W) 'getline.c'; else $(CYGPATH_W) '$(srcdir)/getline.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-getline.Tpo $(DEPDIR)/rscript-getline.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='getline.c' object='rscript-getline.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-getline.obj `if test -f 'getline.c'; then $(CYGPATH_W) 'getline.c'; else $(CYGPATH_W) '$(srcdir)/getline.c'; fi`
 
 rscript-runtime-dummy.o: runtime-dummy.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-runtime-dummy.o -MD -MP -MF $(DEPDIR)/rscript-runtime-dummy.Tpo -c -o rscript-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-runtime-dummy.Tpo $(DEPDIR)/rscript-runtime-dummy.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-runtime-dummy.o -MD -MP -MF $(DEPDIR)/rscript-runtime-dummy.Tpo -c -o rscript-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-runtime-dummy.Tpo $(DEPDIR)/rscript-runtime-dummy.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='runtime-dummy.c' object='rscript-runtime-dummy.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
 
 rscript-runtime-dummy.obj: runtime-dummy.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-runtime-dummy.obj -MD -MP -MF $(DEPDIR)/rscript-runtime-dummy.Tpo -c -o rscript-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rscript-runtime-dummy.Tpo $(DEPDIR)/rscript-runtime-dummy.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rscript-runtime-dummy.obj -MD -MP -MF $(DEPDIR)/rscript-runtime-dummy.Tpo -c -o rscript-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rscript-runtime-dummy.Tpo $(DEPDIR)/rscript-runtime-dummy.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='runtime-dummy.c' object='rscript-runtime-dummy.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rscript_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rscript-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
 
 rt_init-rt-init.o: rt-init.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-rt-init.o -MD -MP -MF $(DEPDIR)/rt_init-rt-init.Tpo -c -o rt_init-rt-init.o `test -f 'rt-init.c' || echo '$(srcdir)/'`rt-init.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rt_init-rt-init.Tpo $(DEPDIR)/rt_init-rt-init.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-rt-init.o -MD -MP -MF $(DEPDIR)/rt_init-rt-init.Tpo -c -o rt_init-rt-init.o `test -f 'rt-init.c' || echo '$(srcdir)/'`rt-init.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rt_init-rt-init.Tpo $(DEPDIR)/rt_init-rt-init.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='rt-init.c' object='rt_init-rt-init.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rt_init-rt-init.o `test -f 'rt-init.c' || echo '$(srcdir)/'`rt-init.c
 
 rt_init-rt-init.obj: rt-init.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-rt-init.obj -MD -MP -MF $(DEPDIR)/rt_init-rt-init.Tpo -c -o rt_init-rt-init.obj `if test -f 'rt-init.c'; then $(CYGPATH_W) 'rt-init.c'; else $(CYGPATH_W) '$(srcdir)/rt-init.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rt_init-rt-init.Tpo $(DEPDIR)/rt_init-rt-init.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-rt-init.obj -MD -MP -MF $(DEPDIR)/rt_init-rt-init.Tpo -c -o rt_init-rt-init.obj `if test -f 'rt-init.c'; then $(CYGPATH_W) 'rt-init.c'; else $(CYGPATH_W) '$(srcdir)/rt-init.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rt_init-rt-init.Tpo $(DEPDIR)/rt_init-rt-init.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='rt-init.c' object='rt_init-rt-init.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rt_init-rt-init.obj `if test -f 'rt-init.c'; then $(CYGPATH_W) 'rt-init.c'; else $(CYGPATH_W) '$(srcdir)/rt-init.c'; fi`
 
 rt_init-runtime-dummy.o: runtime-dummy.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-runtime-dummy.o -MD -MP -MF $(DEPDIR)/rt_init-runtime-dummy.Tpo -c -o rt_init-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rt_init-runtime-dummy.Tpo $(DEPDIR)/rt_init-runtime-dummy.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-runtime-dummy.o -MD -MP -MF $(DEPDIR)/rt_init-runtime-dummy.Tpo -c -o rt_init-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rt_init-runtime-dummy.Tpo $(DEPDIR)/rt_init-runtime-dummy.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='runtime-dummy.c' object='rt_init-runtime-dummy.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rt_init-runtime-dummy.o `test -f 'runtime-dummy.c' || echo '$(srcdir)/'`runtime-dummy.c
 
 rt_init-runtime-dummy.obj: runtime-dummy.c
-@am__fastdepCC_TRUE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-runtime-dummy.obj -MD -MP -MF $(DEPDIR)/rt_init-runtime-dummy.Tpo -c -o rt_init-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
-@am__fastdepCC_TRUE@	$(am__mv) $(DEPDIR)/rt_init-runtime-dummy.Tpo $(DEPDIR)/rt_init-runtime-dummy.Po
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT rt_init-runtime-dummy.obj -MD -MP -MF $(DEPDIR)/rt_init-runtime-dummy.Tpo -c -o rt_init-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/rt_init-runtime-dummy.Tpo $(DEPDIR)/rt_init-runtime-dummy.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='runtime-dummy.c' object='rt_init-runtime-dummy.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(rt_init_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o rt_init-runtime-dummy.obj `if test -f 'runtime-dummy.c'; then $(CYGPATH_W) 'runtime-dummy.c'; else $(CYGPATH_W) '$(srcdir)/runtime-dummy.c'; fi`
+
+tcpflood-tcpflood.o: tcpflood.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tcpflood_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tcpflood-tcpflood.o -MD -MP -MF $(DEPDIR)/tcpflood-tcpflood.Tpo -c -o tcpflood-tcpflood.o `test -f 'tcpflood.c' || echo '$(srcdir)/'`tcpflood.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/tcpflood-tcpflood.Tpo $(DEPDIR)/tcpflood-tcpflood.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='tcpflood.c' object='tcpflood-tcpflood.o' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tcpflood_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tcpflood-tcpflood.o `test -f 'tcpflood.c' || echo '$(srcdir)/'`tcpflood.c
+
+tcpflood-tcpflood.obj: tcpflood.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tcpflood_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tcpflood-tcpflood.obj -MD -MP -MF $(DEPDIR)/tcpflood-tcpflood.Tpo -c -o tcpflood-tcpflood.obj `if test -f 'tcpflood.c'; then $(CYGPATH_W) 'tcpflood.c'; else $(CYGPATH_W) '$(srcdir)/tcpflood.c'; fi`
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/tcpflood-tcpflood.Tpo $(DEPDIR)/tcpflood-tcpflood.Po
+@am__fastdepCC_FALSE@	$(AM_V_CC) @AM_BACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='tcpflood.c' object='tcpflood-tcpflood.obj' libtool=no @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(tcpflood_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tcpflood-tcpflood.obj `if test -f 'tcpflood.c'; then $(CYGPATH_W) 'tcpflood.c'; else $(CYGPATH_W) '$(srcdir)/tcpflood.c'; fi`
 
 mostlyclean-libtool:
 	-rm -f *.lo
 
 clean-libtool:
 	-rm -rf .libs _libs
-
-classcheck.stamp: $(check_JAVA)
-	@list1='$?'; list2=; if test -n "$$list1"; then \
-	  for p in $$list1; do \
-	    if test -f $$p; then d=; else d="$(srcdir)/"; fi; \
-	    list2="$$list2 $$d$$p"; \
-	  done; \
-	  echo '$(CLASSPATH_ENV) $(JAVAC) -d $(JAVAROOT) $(AM_JAVACFLAGS) $(JAVACFLAGS) '"$$list2"; \
-	  $(CLASSPATH_ENV) $(JAVAC) -d $(JAVAROOT) $(AM_JAVACFLAGS) $(JAVACFLAGS) $$list2; \
-	else :; fi
-	echo timestamp > classcheck.stamp
-
-clean-checkJAVA:
-	-rm -f *.class classcheck.stamp
 
 ID: $(HEADERS) $(SOURCES) $(LISP) $(TAGS_FILES)
 	list='$(SOURCES) $(HEADERS) $(LISP) $(TAGS_FILES)'; \
@@ -832,10 +1144,10 @@ distdir: $(DISTFILES)
 	  fi; \
 	done
 check-am: all-am
-	$(MAKE) $(AM_MAKEFLAGS) $(check_PROGRAMS) $(check_JAVA)
+	$(MAKE) $(AM_MAKEFLAGS) $(check_PROGRAMS)
 	$(MAKE) $(AM_MAKEFLAGS) check-TESTS
 check: check-am
-all-am: Makefile classcheck.stamp
+all-am: Makefile
 installdirs:
 install: install-am
 install-exec: install-exec-am
@@ -865,8 +1177,8 @@ maintainer-clean-generic:
 	@echo "it deletes files that may require special tools to rebuild."
 clean: clean-am
 
-clean-am: clean-checkJAVA clean-checkPROGRAMS clean-generic \
-	clean-libtool mostlyclean-am
+clean-am: clean-checkPROGRAMS clean-generic clean-libtool \
+	mostlyclean-am
 
 distclean: distclean-am
 	-rm -rf ./$(DEPDIR)
@@ -937,21 +1249,19 @@ uninstall-am:
 .MAKE: check-am install-am install-strip
 
 .PHONY: CTAGS GTAGS all all-am check check-TESTS check-am clean \
-	clean-checkJAVA clean-checkPROGRAMS clean-generic \
-	clean-libtool ctags distclean distclean-compile \
-	distclean-generic distclean-libtool distclean-tags distdir dvi \
-	dvi-am html html-am info info-am install install-am \
-	install-data install-data-am install-dvi install-dvi-am \
-	install-exec install-exec-am install-html install-html-am \
-	install-info install-info-am install-man install-pdf \
-	install-pdf-am install-ps install-ps-am install-strip \
-	installcheck installcheck-am installdirs maintainer-clean \
+	clean-checkPROGRAMS clean-generic clean-libtool ctags \
+	distclean distclean-compile distclean-generic \
+	distclean-libtool distclean-tags distdir dvi dvi-am html \
+	html-am info info-am install install-am install-data \
+	install-data-am install-dvi install-dvi-am install-exec \
+	install-exec-am install-html install-html-am install-info \
+	install-info-am install-man install-pdf install-pdf-am \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
 	maintainer-clean-generic mostlyclean mostlyclean-compile \
 	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
 	tags uninstall uninstall-am
 
-@ENABLE_TESTBENCH_TRUE@	execonlyonce.sh \
-@ENABLE_TESTBENCH_TRUE@	queue-persist.sh 
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

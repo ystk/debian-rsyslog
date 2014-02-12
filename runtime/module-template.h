@@ -4,25 +4,25 @@
  *
  * File begun on 2007-07-25 by RGerhards
  *
- * Copyright 2007 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007 Adiscon GmbH. This is Adiscon-exclusive code without any other
+ * contributions. *** GPLv3 ***
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
+ * Rsyslog is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
+ * Rsyslog is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
+ * GNU General Public License for more details.
  *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the GNU General Public License
+ * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
  *
  * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
  */
 #ifndef	MODULE_TEMPLATE_H_INCLUDED
 #define	MODULE_TEMPLATE_H_INCLUDED 1
@@ -46,6 +46,12 @@
 	DEFobjCurrIf(obj)
 #define DEF_LMOD_STATIC_DATA \
 	DEF_MOD_STATIC_DATA
+#define DEF_PMOD_STATIC_DATA \
+	DEFobjCurrIf(obj) \
+	DEF_MOD_STATIC_DATA
+#define DEF_SMOD_STATIC_DATA \
+	DEFobjCurrIf(obj) \
+	DEF_MOD_STATIC_DATA
 
 
 /* Macro to define the module type. Each module can only have a single type. If
@@ -65,10 +71,22 @@ static rsRetVal modGetType(eModType_t *modType) \
 
 #define MODULE_TYPE_INPUT MODULE_TYPE(eMOD_IN)
 #define MODULE_TYPE_OUTPUT MODULE_TYPE(eMOD_OUT)
+#define MODULE_TYPE_PARSER MODULE_TYPE(eMOD_PARSER)
+#define MODULE_TYPE_STRGEN MODULE_TYPE(eMOD_STRGEN)
 #define MODULE_TYPE_LIB \
 	DEF_LMOD_STATIC_DATA \
 	MODULE_TYPE(eMOD_LIB)
 
+/* Macro to define whether the module should be kept dynamically linked. 
+ */
+#define MODULE_KEEP_TYPE(x)\
+static rsRetVal modGetKeepType(eModKeepType_t *modKeepType) \
+	{ \
+		*modKeepType = x; \
+		return RS_RET_OK;\
+	}
+#define MODULE_TYPE_NOKEEP MODULE_KEEP_TYPE(eMOD_NOKEEP)
+#define MODULE_TYPE_KEEP MODULE_KEEP_TYPE(eMOD_KEEP)
 
 /* macro to define a unique module id. This must be able to fit in a void*. The
  * module id must be unique inside a running rsyslogd application. It is used to
@@ -334,6 +352,8 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 		*pEtryPoint = modGetID;\
 	} else if(!strcmp((char*) name, "getType")) {\
 		*pEtryPoint = modGetType;\
+	} else if(!strcmp((char*) name, "getKeepType")) {\
+		*pEtryPoint = modGetKeepType;\
 	}
 
 /* the following definition is the standard block for queryEtryPt for output
@@ -368,6 +388,17 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 		*pEtryPoint = endTransaction;\
 	}
 
+
+/* the following definition is a queryEtryPt block that must be added
+ * if a non-output module supports "isCompatibleWithFeature".
+ * rgerhards, 2009-07-20
+ */
+#define CODEqueryEtryPt_IsCompatibleWithFeature_IF_OMOD_QUERIES \
+	  else if(!strcmp((char*) name, "isCompatibleWithFeature")) {\
+		*pEtryPoint = isCompatibleWithFeature;\
+	}
+
+
 /* the following definition is the standard block for queryEtryPt for INPUT
  * modules. This can be used if no specific handling (e.g. to cover version
  * differences) is needed.
@@ -388,6 +419,30 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
  */
 #define CODEqueryEtryPt_STD_LIB_QUERIES \
 	CODEqueryEtryPt_STD_MOD_QUERIES
+
+/* the following definition is the standard block for queryEtryPt for PARSER
+ * modules. This can be used if no specific handling (e.g. to cover version
+ * differences) is needed.
+ */
+#define CODEqueryEtryPt_STD_PMOD_QUERIES \
+	CODEqueryEtryPt_STD_MOD_QUERIES \
+	else if(!strcmp((char*) name, "parse")) {\
+		*pEtryPoint = parse;\
+	} else if(!strcmp((char*) name, "GetParserName")) {\
+		*pEtryPoint = GetParserName;\
+	}
+
+/* the following definition is the standard block for queryEtryPt for Strgen
+ * modules. This can be used if no specific handling (e.g. to cover version
+ * differences) is needed.
+ */
+#define CODEqueryEtryPt_STD_SMOD_QUERIES \
+	CODEqueryEtryPt_STD_MOD_QUERIES \
+	else if(!strcmp((char*) name, "strgen")) {\
+		*pEtryPoint = strgen;\
+	} else if(!strcmp((char*) name, "GetName")) {\
+		*pEtryPoint = GetStrgenName;\
+	}
 
 /* modInit()
  * This has an extra parameter, which is the specific name of the modInit
@@ -576,6 +631,59 @@ static rsRetVal doHUP(instanceData __attribute__((unused)) *pData)\
 
 #define ENDdoHUP \
 	RETiRet;\
+}
+
+
+/* parse() - main entry point of parser modules
+ */
+#define BEGINparse \
+static rsRetVal parse(msg_t *pMsg)\
+{\
+	DEFiRet;
+
+#define CODESTARTparse \
+	assert(pMsg != NULL);
+
+#define ENDparse \
+	RETiRet;\
+}
+
+
+/* strgen() - main entry point of parser modules
+ */
+#define BEGINstrgen \
+static rsRetVal strgen(msg_t *pMsg, uchar **ppBuf, size_t *pLenBuf) \
+{\
+	DEFiRet;
+
+#define CODESTARTstrgen \
+	assert(pMsg != NULL);
+
+#define ENDstrgen \
+	RETiRet;\
+}
+
+
+/* function to specify the parser name. This is done via a single command which
+ * receives a ANSI string as parameter.
+ */
+#define PARSER_NAME(x) \
+static rsRetVal GetParserName(uchar **ppSz)\
+{\
+	*ppSz = UCHAR_CONSTANT(x);\
+	return RS_RET_OK;\
+}
+
+
+
+/* function to specify the strgen name. This is done via a single command which
+ * receives a ANSI string as parameter.
+ */
+#define STRGEN_NAME(x) \
+static rsRetVal GetStrgenName(uchar **ppSz)\
+{\
+	*ppSz = UCHAR_CONSTANT(x);\
+	return RS_RET_OK;\
 }
 
 
