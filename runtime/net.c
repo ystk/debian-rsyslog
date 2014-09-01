@@ -12,7 +12,7 @@
  * long term, but it is good to have it out of syslogd.c. Maybe this here is
  * an interim location ;)
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2011 Rainer Gerhards and Adiscon GmbH.
  *
  * rgerhards, 2008-04-16: I changed this code to LGPL today. I carefully analyzed
  * that it does not borrow code from the original sysklogd and that I have 
@@ -54,6 +54,13 @@
 #include <fnmatch.h>
 #include <fcntl.h>
 #include <unistd.h>
+#if HAVE_GETIFADDRS
+#include <ifaddrs.h>
+#else
+#include "compat/ifaddrs.h"
+#endif /* HAVE_GETIFADDRS */
+#include <sys/types.h>
+#include <arpa/inet.h>
 
 #include "syslogd-types.h"
 #include "module-template.h"
@@ -62,6 +69,8 @@
 #include "obj.h"
 #include "errmsg.h"
 #include "net.h"
+#include "dnscache.h"
+#include "prop.h"
 
 #ifdef OS_SOLARIS
 #	define	s6_addr32	_S6_un._S6_u32
@@ -75,6 +84,7 @@ MODULE_TYPE_NOKEEP
 DEFobjStaticHelpers
 DEFobjCurrIf(errmsg)
 DEFobjCurrIf(glbl)
+DEFobjCurrIf(prop)
 
 /* support for defining allowed TCP and UDP senders. We use the same
  * structure to implement this (a linked list), but we define two different
@@ -165,7 +175,7 @@ AddPermittedPeerWildcard(permittedPeers_t *pPeer, uchar* pszStr, size_t lenStr)
 	assert(pPeer != NULL);
 	assert(pszStr != NULL);
 
-	CHKmalloc(pNew = calloc(1, sizeof(permittedPeers_t)));
+	CHKmalloc(pNew = calloc(1, sizeof(*pNew)));
 
 	if(lenStr == 0) { /* empty domain components are permitted */
 		pNew->wildcardType = PEER_WILDCARD_EMPTY_COMPONENT;
@@ -222,6 +232,7 @@ finalize_it:
 		/* enqueue the element */
 		if(pPeer->pWildcardRoot == NULL) {
 			pPeer->pWildcardRoot = pNew;
+			pPeer->pWildcardLast = pNew;
 		} else {
 			pPeer->pWildcardLast->pNext = pNew;
 		}
@@ -571,7 +582,7 @@ static void
 clearAllowedSenders(uchar *pszType)
 {
 	struct AllowedSenders *pPrev;
-	struct AllowedSenders *pCurr;
+	struct AllowedSenders *pCurr = NULL;
 
 	if(setAllowRoot(&pCurr, pszType) != RS_RET_OK)
 		return;	/* if something went wrong, so let's leave */
@@ -702,8 +713,10 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 					memcpy(allowIP.addr.NetAddr, res->ai_addr, res->ai_addrlen);
 					
 					if((iRet = AddAllowedSenderEntry(ppRoot, ppLast, &allowIP, iSignificantBits))
-						!= RS_RET_OK)
+						!= RS_RET_OK) {
+						free(allowIP.addr.NetAddr);
 						FINALIZE;
+					}
 					break;
 				case AF_INET6: /* IPv6 - but need to check if it is a v6-mapped IPv4 */
 					if(IN6_IS_ADDR_V4MAPPED (&SIN6(res->ai_addr)->sin6_addr)) {
@@ -711,7 +724,7 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 						
 						iSignificantBits = 32;
 						allowIP.flags = 0;
-						if((allowIP.addr.NetAddr = MALLOC(sizeof(struct sockaddr_in)))
+						if((allowIP.addr.NetAddr = (struct sockaddr *) MALLOC(sizeof(struct sockaddr_in)))
 						    == NULL) {
 							ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 						}
@@ -726,8 +739,10 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 
 						if((iRet = AddAllowedSenderEntry(ppRoot, ppLast, &allowIP,
 								iSignificantBits))
-							!= RS_RET_OK)
+							!= RS_RET_OK) {
+							free(allowIP.addr.NetAddr);
 							FINALIZE;
+						}
 					} else {
 						/* finally add IPv6 */
 						
@@ -740,8 +755,10 @@ static rsRetVal AddAllowedSender(struct AllowedSenders **ppRoot, struct AllowedS
 						
 						if((iRet = AddAllowedSenderEntry(ppRoot, ppLast, &allowIP,
 								iSignificantBits))
-							!= RS_RET_OK)
+							!= RS_RET_OK) {
+							free(allowIP.addr.NetAddr);
 							FINALIZE;
+						}
 					}
 					break;
 				}
@@ -876,6 +893,7 @@ rsRetVal addAllowedSenderLine(char* pName, uchar** ppRestOfConfLine)
 			        errmsg.LogError(0, iRet, "Error %d adding allowed sender entry "
 					    "- terminating, nothing more will be added.", iRet);
 				rsParsDestruct(pPars);
+				free(uIP);
 				return(iRet);
 		        }
 		}
@@ -979,7 +997,7 @@ MaskCmp(struct NetAddr *pAllow, uint8_t bits, struct sockaddr *pFrom, const char
 static int isAllowedSender2(uchar *pszType, struct sockaddr *pFrom, const char *pszFromHost, int bChkDNS)
 {
 	struct AllowedSenders *pAllow;
-	struct AllowedSenders *pAllowRoot;
+	struct AllowedSenders *pAllowRoot = NULL;
 	int bNeededDNS = 0;	/* partial check because we could not resolve DNS? */
 	int ret;
 
@@ -1064,108 +1082,6 @@ should_use_so_bsdcompat(void)
 #define SO_BSDCOMPAT 0
 #endif
 
-/* get the hostname of the message source. This was originally in cvthname()
- * but has been moved out of it because of clarity and fuctional separation.
- * It must be provided by the socket we received the message on as well as
- * a NI_MAXHOST size large character buffer for the FQDN.
- * 2008-05-16 rgerhards: added field for IP address representation. Must also
- * be NI_MAXHOST size large.
- *
- * Please see http://www.hmug.org/man/3/getnameinfo.php (under Caveats)
- * for some explanation of the code found below. We do by default not
- * discard message where we detected malicouos DNS PTR records. However,
- * there is a user-configurabel option that will tell us if
- * we should abort. For this, the return value tells the caller if the
- * message should be processed (1) or discarded (0).
- */
-static rsRetVal
-gethname(struct sockaddr_storage *f, uchar *pszHostFQDN, uchar *ip)
-{
-	DEFiRet;
-	int error;
-	sigset_t omask, nmask;
-	struct addrinfo hints, *res;
-	
-	assert(f != NULL);
-	assert(pszHostFQDN != NULL);
-
-        error = mygetnameinfo((struct sockaddr *)f, SALEN((struct sockaddr *)f),
-			    (char*) ip, NI_MAXHOST, NULL, 0, NI_NUMERICHOST);
-
-        if (error) {
-                dbgprintf("Malformed from address %s\n", gai_strerror(error));
-		strcpy((char*) pszHostFQDN, "???");
-		strcpy((char*) ip, "???");
-		ABORT_FINALIZE(RS_RET_INVALID_SOURCE);
-	}
-
-	if(!glbl.GetDisableDNS()) {
-		sigemptyset(&nmask);
-		sigaddset(&nmask, SIGHUP);
-		pthread_sigmask(SIG_BLOCK, &nmask, &omask);
-
-		error = mygetnameinfo((struct sockaddr *)f, SALEN((struct sockaddr *) f),
-				    (char*)pszHostFQDN, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
-		
-		if (error == 0) {
-			memset (&hints, 0, sizeof (struct addrinfo));
-			hints.ai_flags = AI_NUMERICHOST;
-
-			/* we now do a lookup once again. This one should fail,
-			 * because we should not have obtained a non-numeric address. If
-			 * we got a numeric one, someone messed with DNS!
-			 */
-			if (getaddrinfo ((char*)pszHostFQDN, NULL, &hints, &res) == 0) {
-				uchar szErrMsg[1024];
-				freeaddrinfo (res);
-				/* OK, we know we have evil. The question now is what to do about
-				 * it. One the one hand, the message might probably be intended
-				 * to harm us. On the other hand, losing the message may also harm us.
-				 * Thus, the behaviour is controlled by the $DropMsgsWithMaliciousDnsPTRRecords
-				 * option. If it tells us we should discard, we do so, else we proceed,
-				 * but log an error message together with it.
-				 * time being, we simply drop the name we obtained and use the IP - that one
-				 * is OK in any way. We do also log the error message. rgerhards, 2007-07-16
-		 		 */
-		 		if(glbl.GetDropMalPTRMsgs() == 1) {
-					snprintf((char*)szErrMsg, sizeof(szErrMsg) / sizeof(uchar),
-						 "Malicious PTR record, message dropped "
-						 "IP = \"%s\" HOST = \"%s\"",
-						 ip, pszHostFQDN);
-					errmsg.LogError(0, RS_RET_MALICIOUS_ENTITY, "%s", szErrMsg);
-					pthread_sigmask(SIG_SETMASK, &omask, NULL);
-					ABORT_FINALIZE(RS_RET_MALICIOUS_ENTITY);
-				}
-
-				/* Please note: we deal with a malicous entry. Thus, we have crafted
-				 * the snprintf() below so that all text is in front of the entry - maybe
-				 * it contains characters that make the message unreadable
-				 * (OK, I admit this is more or less impossible, but I am paranoid...)
-				 * rgerhards, 2007-07-16
-				 */
-				snprintf((char*)szErrMsg, sizeof(szErrMsg) / sizeof(uchar),
-					 "Malicious PTR record (message accepted, but used IP "
-					 "instead of PTR name: IP = \"%s\" HOST = \"%s\"",
-					 ip, pszHostFQDN);
-				errmsg.LogError(0, NO_ERRCODE, "%s", szErrMsg);
-
-				error = 1; /* that will trigger using IP address below. */
-			}
-		}		
-		pthread_sigmask(SIG_SETMASK, &omask, NULL);
-	}
-
-        if(error || glbl.GetDisableDNS()) {
-                dbgprintf("Host name for your address (%s) unknown\n", ip);
-		strcpy((char*) pszHostFQDN, (char*)ip);
-		ABORT_FINALIZE(RS_RET_ADDRESS_UNKNOWN);
-        }
-
-finalize_it:
-	RETiRet;
-}
-
-
 
 /* print out which socket we are listening on. This is only
  * a debug aid. rgerhards, 2007-07-02
@@ -1174,22 +1090,18 @@ void debugListenInfo(int fd, char *type)
 {
 	char *szFamily;
 	int port;
-	struct sockaddr sa;
-	struct sockaddr_in *ipv4;
-	struct sockaddr_in6 *ipv6;
+	struct sockaddr_storage sa;
 	socklen_t saLen = sizeof(sa);
 
-	if(getsockname(fd, &sa, &saLen) == 0) {
-		switch(sa.sa_family) {
+	if(getsockname(fd, (struct sockaddr *) &sa, &saLen) == 0) {
+		switch(sa.ss_family) {
 		case PF_INET:
 			szFamily = "IPv4";
-			ipv4 = (struct sockaddr_in*)(void*) &sa;
-			port = ntohs(ipv4->sin_port);
+			port = ntohs(((struct sockaddr_in *) &sa)->sin_port);
 			break;
 		case PF_INET6:
 			szFamily = "IPv6";
-			ipv6 = (struct sockaddr_in6*)(void*) &sa;
-			port = ntohs(ipv6->sin6_port);
+			port = ntohs(((struct sockaddr_in6 *) &sa)->sin6_port);
 			break;
 		default:
 			szFamily = "other";
@@ -1209,98 +1121,15 @@ void debugListenInfo(int fd, char *type)
 }
 
 
-/* Return a printable representation of a host address.
- * Now (2007-07-16) also returns the full host name (if it could be obtained)
- * in the second param [thanks to mildew@gmail.com for the patch].
- * The caller must provide buffer space for pszHost and pszHostFQDN. These
- * buffers must be of size NI_MAXHOST. This is not checked here, because
- * there is no way to check it. We use this way of doing things because it
- * frees us from using dynamic memory allocation where it really does not
- * pay.
- * 2005-05-16 rgerhards: added IP representation. Must also be NI_MAXHOST
+/* Return a printable representation of a host addresses. If
+ * a parameter is NULL, it is not set.  rgerhards, 2013-01-22
  */
-rsRetVal cvthname(struct sockaddr_storage *f, uchar *pszHost, uchar *pszHostFQDN, uchar *pszIP)
+rsRetVal
+cvthname(struct sockaddr_storage *f, prop_t **localName, prop_t **fqdn, prop_t **ip)
 {
 	DEFiRet;
-	register uchar *p;
-	int count;
-	
 	assert(f != NULL);
-	assert(pszHost != NULL);
-	assert(pszHostFQDN != NULL);
-
-	iRet = gethname(f, pszHostFQDN, pszIP);
-
-	if(iRet == RS_RET_INVALID_SOURCE || iRet == RS_RET_ADDRESS_UNKNOWN) {
-		strcpy((char*) pszHost, (char*) pszHostFQDN); /* we use whatever was provided as replacement */
-		ABORT_FINALIZE(RS_RET_OK); /* this is handled, we are happy with it */
-	} else if(iRet != RS_RET_OK) {
-		FINALIZE; /* we return whatever error state we have - can not handle it */
-	}
-
-	/* if we reach this point, we obtained a non-numeric hostname and can now process it */
-
-	/* Convert to lower case */
-	for(p = pszHostFQDN ; *p ; p++)
-		if (isupper((int) *p))
-			*p = tolower(*p);
-	
-	/* OK, the fqdn is now known. Now it is time to extract only the hostname
-	 * part if we were instructed to do so.
-	 */
-	/* TODO: quick and dirty right now: we need to optimize that. We simply
-	 * copy over the buffer and then use the old code. In the long term, that should
-	 * be placed in its own function and probably outside of the net module (at least
-	 * if should no longer reley on syslogd.c's global config-setting variables).
-	 * Note that the old code always removes the local domain. We may want to
-	 * make this in option in the long term. (rgerhards, 2007-09-11)
-	 */
-	strcpy((char*)pszHost, (char*)pszHostFQDN);
-	if(   (glbl.GetPreserveFQDN() == 0)
-	   && (p = (uchar*) strchr((char*)pszHost, '.'))) { /* find start of domain name "machine.example.com" */
-		strcmp((char*)(p + 1), (char*)glbl.GetLocalDomain());
-		if(strcmp((char*)(p + 1), (char*)glbl.GetLocalDomain()) == 0) {
-			*p = '\0'; /* simply terminate the string */
-		} else {
-			/* now check if we belong to any of the domain names that were specified
-			 * in the -s command line option. If so, remove and we are done.
-			 * TODO: this must go away! -- rgerhards, 2008-04-16
-			 * For proper modularization, this must be done different, e.g. via a
-			 * "to be stripped" property of *this* object itself.
-			 */
-			if(glbl.GetStripDomains() != NULL) {
-				count=0;
-				while(glbl.GetStripDomains()[count]) {
-					if (strcmp((char*)(p + 1), glbl.GetStripDomains()[count]) == 0) {
-						*p = '\0';
-						FINALIZE; /* we are done */
-					}
-					count++;
-				}
-			}
-			/* if we reach this point, we have not found any domain we should strip. Now
-			 * we try and see if the host itself is listed in the -l command line option
-			 * and so should be stripped also. If so, we do it and return. Please note that
-			 * -l list FQDNs, not just the hostname part. If it did just list the hostname, the
-			 * door would be wide-open for all kinds of mixing up of hosts. Because of this,
-			 * you'll see comparison against the full string (pszHost) below. The termination
-			 * still occurs at *p, which points at the first dot after the hostname.
-			 * TODO: this must also go away - see comment above -- rgerhards, 2008-04-16
-			 */
-			if(glbl.GetLocalHosts() != NULL) {
-				count=0;
-				while (glbl.GetLocalHosts()[count]) {
-					if (!strcmp((char*)pszHost, (char*)glbl.GetLocalHosts()[count])) {
-						*p = '\0';
-						break; /* we are done */
-					}
-					count++;
-				}
-			}
-		}
-	}
-
-finalize_it:
+	iRet = dnscacheLookup(f, NULL, fqdn, localName, ip);
 	RETiRet;
 }
 
@@ -1326,8 +1155,11 @@ getLocalHostname(uchar **ppName)
 			buf_len = 128;        /* Initial guess */
 			CHKmalloc(buf = MALLOC(buf_len));
 		} else {
+			uchar *p;
+
 			buf_len += buf_len;
-			CHKmalloc(buf = realloc (buf, buf_len));
+			CHKmalloc(p = realloc (buf, buf_len));
+			buf = p;
 		}
 	} while((gethostname((char*)buf, buf_len) == 0 && !memchr (buf, '\0', buf_len)) || errno == ENAMETOOLONG);
 
@@ -1363,12 +1195,16 @@ void closeUDPListenSockets(int *pSockArr)
  * hostname and/or pszPort may be NULL, but not both!
  * bIsServer indicates if a server socket should be created
  * 1 - server, 0 - client
+ * param rcvbuf indicates desired rcvbuf size; 0 means OS default
  */
-int *create_udp_socket(uchar *hostname, uchar *pszPort, int bIsServer)
+int *create_udp_socket(uchar *hostname, uchar *pszPort, int bIsServer, int rcvbuf)
 {
         struct addrinfo hints, *res, *r;
         int error, maxs, *s, *socks, on = 1;
 	int sockflags;
+	int actrcvbuf;
+	socklen_t optlen;
+	char errStr[1024];
 
 	assert(!((pszPort == NULL) && (hostname == NULL)));
         memset(&hints, 0, sizeof(hints));
@@ -1471,6 +1307,35 @@ int *create_udp_socket(uchar *hostname, uchar *pszPort, int bIsServer)
 			continue;
 		}
 
+		if(rcvbuf != 0) {
+#			if defined(SO_RCVBUFFORCE)
+			if(setsockopt(*s, SOL_SOCKET, SO_RCVBUFFORCE, &rcvbuf, sizeof(rcvbuf)) < 0)
+#			endif
+			{
+				/* if we fail, try to do it the regular way. Experiments show that at 
+				 * least some platforms do not return an error here, but silently set
+				 * it to the max permitted value. So we do our error check a bit
+				 * differently by querying the size below.
+				 */
+				setsockopt(*s, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+			}
+		}
+
+		if(Debug || rcvbuf != 0) {
+			optlen = sizeof(actrcvbuf);
+			if(getsockopt(*s, SOL_SOCKET, SO_RCVBUF, &actrcvbuf, &optlen) == 0) {
+				dbgprintf("socket %d, actual os socket rcvbuf size %d\n", *s, actrcvbuf);
+				if(rcvbuf != 0 && actrcvbuf/2 != rcvbuf) {
+					errmsg.LogError(errno, NO_ERRCODE,
+						"cannot set os socket rcvbuf size %d for socket %d, value now is %d",
+						rcvbuf, *s, actrcvbuf/2);
+				}
+			} else {
+				dbgprintf("could not obtain os socket rcvbuf size for socket %d: %s\n",
+					*s, rs_strerror_r(errno, errStr, sizeof(errStr)));
+			}
+		}
+
 		if(bIsServer) {
 			/* rgerhards, 2007-06-22: if we run on a kernel that does not support
 			 * the IPV6_V6ONLY socket option, we need to use a work-around. On such
@@ -1565,7 +1430,7 @@ finalize_it:
  */
 static rsRetVal
 HasRestrictions(uchar *pszType, int *bHasRestrictions) {
-	struct AllowedSenders *pAllowRoot;
+	struct AllowedSenders *pAllowRoot = NULL;
 	DEFiRet;
 
 	CHKiRet(setAllowRoot(&pAllowRoot, pszType));
@@ -1578,6 +1443,54 @@ finalize_it:
 		DBGPRINTF("Error %d trying to obtain ACL restriction state of '%s'\n", iRet, pszType);
 	}
 	RETiRet;
+}
+
+
+/* return the IP address (IPv4/6) for the provided interface. Returns
+ * RS_RET_NOT_FOUND if interface can not be found in interface list.
+ * The family must be correct (AF_INET vs. AF_INET6, AF_UNSPEC means
+ * either of *these two*).
+ * The function re-queries the interface list (at least in theory).
+ * However, it caches entries in order to avoid too-frequent requery.
+ * rgerhards, 2012-03-06
+ */
+static rsRetVal
+getIFIPAddr(uchar *szif, int family, uchar *pszbuf, int lenBuf)
+{
+	struct ifaddrs * ifaddrs = NULL;
+	struct ifaddrs * ifa;
+	void * pAddr;
+	DEFiRet;
+
+ 	if(getifaddrs(&ifaddrs) != 0) {
+		ABORT_FINALIZE(RS_RET_ERR);
+	}
+
+	for (ifa = ifaddrs; ifa != NULL; ifa = ifa->ifa_next) {
+		if(strcmp(ifa->ifa_name, (char*)szif))
+			continue;
+		if(   (family == AF_INET6 || family == AF_UNSPEC)
+		   && ifa->ifa_addr->sa_family == AF_INET6) {
+			pAddr = &((struct sockaddr_in6 *)ifa->ifa_addr)->sin6_addr;
+			inet_ntop(AF_INET6, pAddr, (char*)pszbuf, lenBuf);
+			break;
+		} else if(/*   (family == AF_INET || family == AF_UNSPEC)
+		         &&*/ ifa->ifa_addr->sa_family == AF_INET) {
+			pAddr = &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
+			inet_ntop(AF_INET, pAddr, (char*)pszbuf, lenBuf);
+			break;
+		} 
+	}
+
+	if(ifaddrs != NULL)
+		freeifaddrs(ifaddrs);
+
+	if(ifa == NULL)
+		iRet = RS_RET_NOT_FOUND;
+
+finalize_it:
+	RETiRet;
+
 }
 
 
@@ -1612,6 +1525,7 @@ CODESTARTobjQueryInterface(net)
 	pIf->PermittedPeerWildcardMatch = PermittedPeerWildcardMatch;
 	pIf->CmpHost = CmpHost;
 	pIf->HasRestrictions = HasRestrictions;
+	pIf->GetIFIPAddr = getIFIPAddr;
 	/* data members */
 	pIf->pACLAddHostnameOnFail = &ACLAddHostnameOnFail;
 	pIf->pACLDontResolve = &ACLDontResolve;
@@ -1626,6 +1540,7 @@ BEGINObjClassExit(net, OBJ_IS_LOADABLE_MODULE) /* CHANGE class also in END MACRO
 CODESTARTObjClassExit(net)
 	/* release objects we no longer need */
 	objRelease(glbl, CORE_COMPONENT);
+	objRelease(prop, CORE_COMPONENT);
 	objRelease(errmsg, CORE_COMPONENT);
 ENDObjClassExit(net)
 
@@ -1638,6 +1553,7 @@ BEGINAbstractObjClassInit(net, 1, OBJ_IS_CORE_MODULE) /* class, version */
 	/* request objects we use */
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
 	CHKiRet(objUse(glbl, CORE_COMPONENT));
+	CHKiRet(objUse(prop, CORE_COMPONENT));
 
 	/* set our own handlers */
 ENDObjClassInit(net)

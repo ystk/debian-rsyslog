@@ -42,9 +42,7 @@ rsRetVal OMSRdestruct(omodStringRequest_t *pThis)
 	/* free the strings */
 	if(pThis->ppTplName != NULL) {
 		for(i = 0 ; i < pThis->iNumEntries ; ++i) {
-			if(pThis->ppTplName[i] != NULL) {
-				free(pThis->ppTplName[i]);
-			}
+			free(pThis->ppTplName[i]);
 		}
 		free(pThis->ppTplName);
 	}
@@ -60,11 +58,14 @@ rsRetVal OMSRdestruct(omodStringRequest_t *pThis)
  */
 rsRetVal OMSRconstruct(omodStringRequest_t **ppThis, int iNumEntries)
 {
-	omodStringRequest_t *pThis;
+	omodStringRequest_t *pThis = NULL;
 	DEFiRet;
 
 	assert(ppThis != NULL);
 	assert(iNumEntries >= 0);
+	if(iNumEntries > CONF_OMOD_NUMSTRINGS_MAXSIZE) {
+		ABORT_FINALIZE(RS_RET_MAX_OMSR_REACHED);
+	}
 	CHKmalloc(pThis = calloc(1, sizeof(omodStringRequest_t)));
 
 	/* got the structure, so fill it */
@@ -94,7 +95,6 @@ finalize_it:
 rsRetVal OMSRsetEntry(omodStringRequest_t *pThis, int iEntry, uchar *pTplName, int iTplOpts)
 {
 	assert(pThis != NULL);
-	assert(pTplName != NULL);
 	assert(iEntry < pThis->iNumEntries);
 
 	if(pThis->ppTplName[iEntry] != NULL)
@@ -147,7 +147,8 @@ OMSRgetSupportedTplOpts(unsigned long *pOpts)
 {
 	DEFiRet;
 	assert(pOpts != NULL);
-	*pOpts = OMSR_RQD_TPL_OPT_SQL | OMSR_TPL_AS_ARRAY | OMSR_TPL_AS_MSG;
+	*pOpts = OMSR_RQD_TPL_OPT_SQL | OMSR_TPL_AS_ARRAY | OMSR_TPL_AS_MSG
+		 | OMSR_TPL_AS_JSON;
 	RETiRet;
 }
 

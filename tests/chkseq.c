@@ -7,10 +7,14 @@
  * -s<starting number> -e<ending number>
  * default for s is 0. -e should be given (else it is also 0)
  * -d may be specified, in which case duplicate messages are permitted.
+ * -m number of messages permitted to be missing without triggering a
+ *    failure. This is necessary for some failover tests, where it is
+ *    impossible to totally guard against messagt loss. By default, NO
+ *    message is permitted to be lost.
  *
  * Part of the testbench for rsyslog.
  *
- * Copyright 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -47,12 +51,15 @@ int main(int argc, char *argv[])
 	int dupsPermitted = 0;
 	int start = 0, end = 0;
 	int opt;
+	int lostok = 0; /* how many messages are OK to be lost? */
 	int nDups = 0;
+	int reachedEOF;
 	int edLen;	/* length of extra data */
 	static char edBuf[500*1024]; /* buffer for extra data (pretty large to be on the save side...) */
+	static char ioBuf[sizeof(edBuf)+1024];
 	char *file = NULL;
 
-	while((opt = getopt(argc, argv, "e:f:ds:vE")) != EOF) {
+	while((opt = getopt(argc, argv, "e:f:ds:vm:E")) != EOF) {
 		switch((char)opt) {
 		case 'f':
 			file = optarg;
@@ -68,6 +75,9 @@ int main(int argc, char *argv[])
 			break;
                 case 'v':
 			++verbose;
+			break;
+                case 'm':
+			lostok = atoi(optarg);
 			break;
                 case 'E':
 			bHaveExtraData = 1;
@@ -102,18 +112,31 @@ int main(int argc, char *argv[])
 
 	for(i = start ; i < end+1 ; ++i) {
 		if(bHaveExtraData) {
-			scanfOK = fscanf(fp, "%d,%d,%s\n", &val, &edLen, edBuf) == 3 ? 1 : 0;
+			if(fgets(ioBuf, sizeof(ioBuf), fp) == NULL) {
+				scanfOK = 0;
+			} else {
+				scanfOK = sscanf(ioBuf, "%d,%d,%s\n", &val, &edLen, edBuf) == 3 ? 1 : 0;
+			}
 			if(edLen != (int) strlen(edBuf)) {
 				printf("extra data length specified %d, but actually is %ld in record %d\n",
 					edLen, (long) strlen(edBuf), i);
 				exit(1);
 			}
 		} else {
-			scanfOK = fscanf(fp, "%d\n", &val) == 1 ? 1 : 0;
+			if(fgets(ioBuf, sizeof(ioBuf), fp) == NULL) {
+				scanfOK = 0;
+			} else {
+				scanfOK = sscanf(ioBuf, "%d\n", &val) == 1 ? 1 : 0;
+			}
 		}
 		if(!scanfOK) {
 			printf("scanf error in index i=%d\n", i);
 			exit(1);
+		}
+		while(val > i && lostok > 0) {
+			--lostok;
+			printf("message %d missing (ok due to -m [now %d])\n", i, lostok);
+			++i;
 		}
 		if(val != i) {
 			if(val == i - 1 && dupsPermitted) {
@@ -126,15 +149,57 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if(nDups != 0)
-		printf("info: had %d duplicates (this is no error)\n", nDups);
-
 	if(i - 1 != end) {
 		printf("only %d records in file, expected %d\n", i - 1, end);
 		exit(1);
 	}
 
-	if(!feof(fp)) {
+	int c = getc(fp);
+	if(c == EOF) {
+		reachedEOF = 1;
+	} else {
+		ungetc(c, fp);
+		/* if duplicates are permitted, we need to do a final check if we have duplicates at the
+		 * end of file.
+		 */
+		if(dupsPermitted) {
+			i = end;
+			while(!feof(fp)) {
+				if(bHaveExtraData) {
+					if(fgets(ioBuf, sizeof(ioBuf), fp) == NULL) {
+						scanfOK = 0;
+					} else {
+						scanfOK = sscanf(ioBuf, "%d,%d,%s\n", &val, &edLen, edBuf) == 3 ? 1 : 0;
+					}
+					if(edLen != (int) strlen(edBuf)) {
+						printf("extra data length specified %d, but actually is %ld in record %d\n",
+							edLen, (long) strlen(edBuf), i);
+						exit(1);
+					}
+				} else {
+					if(fgets(ioBuf, sizeof(ioBuf), fp) == NULL) {
+						scanfOK = 0;
+					} else {
+						scanfOK = sscanf(ioBuf, "%d\n", &val) == 1 ? 1 : 0;
+					}
+				}
+
+				if(val != i) {
+					reachedEOF = 0;
+					goto breakIF;
+				}
+			}
+			reachedEOF = feof(fp) ? 1 : 0;
+		} else {
+			reachedEOF = 0;
+		}
+	}
+
+breakIF:
+	if(nDups != 0)
+		printf("info: had %d duplicates (this is no error)\n", nDups);
+
+	if(!reachedEOF) {
 		printf("end of processing, but NOT end of file!\n");
 		exit(1);
 	}

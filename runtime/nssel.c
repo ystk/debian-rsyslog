@@ -9,7 +9,7 @@
  * 
  * Work on this module begun 2008-04-22 by Rainer Gerhards.
  *
- * Copyright 2008-2012 Adiscon GmbH.
+ * Copyright 2008-2014 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -107,6 +107,7 @@ CODESTARTobjDestruct(nssel)
 	 * a driver name string as load indicator (because we also need that string
 	 * to release the driver 
 	 */
+	free(pThis->pBaseDrvrName);
 	if(pThis->pDrvrName != NULL) {
 		obj.ReleaseObj(__FILE__, pThis->pDrvrName+2, DONT_LOAD_LIB, (void*) &pThis->Drvr);
 		free(pThis->pDrvrName);
@@ -122,6 +123,29 @@ ConstructFinalize(nssel_t *pThis)
 	ISOBJ_TYPE_assert(pThis, nssel);
 	CHKiRet(loadDrvr(pThis));
 	CHKiRet(pThis->Drvr.Construct(&pThis->pDrvrData));
+finalize_it:
+	RETiRet;
+}
+
+
+/* set the base driver name. If the driver name
+ * is set to NULL, the previously set name is deleted but
+ * no name set again (which results in the system default being
+ * used)-- rgerhards, 2008-05-05
+ */
+static rsRetVal
+SetDrvrName(nssel_t *pThis, uchar *pszName)
+{
+	DEFiRet;
+	ISOBJ_TYPE_assert(pThis, netstrms);
+	if(pThis->pBaseDrvrName != NULL) {
+		free(pThis->pBaseDrvrName);
+		pThis->pBaseDrvrName = NULL;
+	}
+
+	if(pszName != NULL) {
+		CHKmalloc(pThis->pBaseDrvrName = (uchar*) strdup((char*) pszName));
+	}
 finalize_it:
 	RETiRet;
 }
@@ -195,6 +219,7 @@ CODESTARTobjQueryInterface(nssel)
 	pIf->Construct = nsselConstruct;
 	pIf->ConstructFinalize = ConstructFinalize;
 	pIf->Destruct = nsselDestruct;
+	pIf->SetDrvrName = SetDrvrName;
 	pIf->Add = Add;
 	pIf->Wait = Wait;
 	pIf->IsReady = IsReady;

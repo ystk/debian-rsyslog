@@ -64,6 +64,7 @@ ENDobjConstruct(netstrm)
 /* destructor for the netstrm object */
 BEGINobjDestruct(netstrm) /* be sure to specify the object type also in END and CODESTART macros! */
 CODESTARTobjDestruct(netstrm)
+//printf("destruct driver data %p\n", pThis->pDrvrData);
 	if(pThis->pDrvrData != NULL)
 		iRet = pThis->Drvr.Destruct(&pThis->pDrvrData);
 ENDobjDestruct(netstrm)
@@ -169,6 +170,7 @@ Rcv(netstrm_t *pThis, uchar *pBuf, ssize_t *pLenBuf)
 {
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, netstrm);
+//printf("Rcv %p\n", pThis);
 	iRet = pThis->Drvr.Rcv(pThis->pDrvrData, pBuf, pLenBuf);
 	RETiRet;
 }
@@ -248,11 +250,11 @@ EnableKeepAlive(netstrm_t *pThis)
 
 
 /* check connection - slim wrapper for NSD driver function */
-static void
+static rsRetVal
 CheckConnection(netstrm_t *pThis)
 {
 	ISOBJ_TYPE_assert(pThis, netstrm);
-	pThis->Drvr.CheckConnection(pThis->pDrvrData);
+	return pThis->Drvr.CheckConnection(pThis->pDrvrData);
 }
 
 
@@ -269,11 +271,11 @@ GetRemoteHName(netstrm_t *pThis, uchar **ppsz)
 
 /* get remote IP - slim wrapper for NSD driver function */
 static rsRetVal
-GetRemoteIP(netstrm_t *pThis, uchar **ppsz)
+GetRemoteIP(netstrm_t *pThis, prop_t **ip)
 {
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, netstrm);
-	iRet = pThis->Drvr.GetRemoteIP(pThis->pDrvrData, ppsz);
+	iRet = pThis->Drvr.GetRemoteIP(pThis->pDrvrData, ip);
 	RETiRet;
 }
 

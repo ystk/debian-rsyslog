@@ -37,6 +37,7 @@
 
 #include "cfsysline.h"
 #include "obj.h"
+#include "conf.h"
 #include "errmsg.h"
 #include "srUtils.h"
 #include "unicode-helper.h"
@@ -154,36 +155,6 @@ finalize_it:
 }
 
 
-/* Parse a number from the configuration line.
- * rgerhards, 2007-07-31
- */
-static rsRetVal doGetInt(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *pVal)
-{
-	uchar *p;
-	DEFiRet;
-	int64 i;	
-
-	assert(pp != NULL);
-	assert(*pp != NULL);
-	
-	CHKiRet(parseIntVal(pp, &i));
-	p = *pp;
-
-	if(pSetHdlr == NULL) {
-		/* we should set value directly to var */
-		*((int*)pVal) = (int) i;
-	} else {
-		/* we set value via a set function */
-		CHKiRet(pSetHdlr(pVal, (int) i));
-	}
-
-	*pp = p;
-
-finalize_it:
-	RETiRet;
-}
-
-
 /* Parse a size from the configuration line. This is basically an integer
  * syntax, but modifiers may be added after the integer (e.g. 1k to mean
  * 1024). The size must immediately follow the number. Note that the
@@ -237,7 +208,44 @@ finalize_it:
 }
 
 
-/* Parse and interpet a $FileCreateMode and $umask line. This function
+/* Parse a number from the configuration line.
+ * rgerhards, 2007-07-31
+ */
+static rsRetVal doGetInt(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *pVal)
+{
+	uchar *p;
+	DEFiRet;
+	int64 i;	
+	uchar errMsg[256];	/* for dynamic error messages */
+
+	assert(pp != NULL);
+	assert(*pp != NULL);
+	
+	CHKiRet(doGetSize(pp, NULL,&i));
+	p = *pp;
+	if(i > 2147483648ll) { /*2^31*/
+		snprintf((char*) errMsg, sizeof(errMsg)/sizeof(uchar),
+		         "value %lld too large for integer argument.", i);
+		errmsg.LogError(0, RS_RET_INVALID_VALUE, "%s", errMsg);
+		ABORT_FINALIZE(RS_RET_INVALID_VALUE);
+	}
+
+	if(pSetHdlr == NULL) {
+		/* we should set value directly to var */
+		*((int*)pVal) = (int) i;
+	} else {
+		/* we set value via a set function */
+		CHKiRet(pSetHdlr(pVal, (int) i));
+	}
+
+	*pp = p;
+
+finalize_it:
+	RETiRet;
+}
+
+
+/* Parse and interpret a $FileCreateMode and $umask line. This function
  * pulls the creation mode and, if successful, stores it
  * into the global variable so that the rest of rsyslogd
  * opens files with that mode. Any previous value will be
@@ -338,11 +346,13 @@ static int doParseOnOffOption(uchar **pp)
  */
 static rsRetVal doGetGID(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *pVal)
 {
-	struct group *pgBuf;
+	struct group *pgBuf = NULL;
 	struct group gBuf;
 	DEFiRet;
 	uchar szName[256];
-	char stringBuf[2048];	/* I hope this is large enough... */
+	int bufSize = 1024;
+	char * stringBuf = NULL;
+	int err;
 
 	assert(pp != NULL);
 	assert(*pp != NULL);
@@ -352,10 +362,24 @@ static rsRetVal doGetGID(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *p
 		ABORT_FINALIZE(RS_RET_NOT_FOUND);
 	}
 
-	getgrnam_r((char*)szName, &gBuf, stringBuf, sizeof(stringBuf), &pgBuf);
+	do {
+		char *p;
+
+		/* Increase bufsize and try again.*/
+		bufSize *= 2;
+		CHKmalloc(p = realloc(stringBuf, bufSize));
+		stringBuf = p;
+		err = getgrnam_r((char*)szName, &gBuf, stringBuf, bufSize, &pgBuf);
+	} while((pgBuf == NULL) && (err == ERANGE));
 
 	if(pgBuf == NULL) {
-		errmsg.LogError(0, RS_RET_NOT_FOUND, "ID for group '%s' could not be found or error", (char*)szName);
+		if (err != 0) {
+			rs_strerror_r(err, stringBuf, bufSize);
+			errmsg.LogError(0, RS_RET_NOT_FOUND, "Query for group '%s' resulted in an error: %s\n",
+				(char*)szName, stringBuf);
+		} else {
+			errmsg.LogError(0, RS_RET_NOT_FOUND, "ID for group '%s' could not be found", (char*)szName);
+		}
 		iRet = RS_RET_NOT_FOUND;
 	} else {
 		if(pSetHdlr == NULL) {
@@ -371,6 +395,7 @@ static rsRetVal doGetGID(uchar **pp, rsRetVal (*pSetHdlr)(void*, uid_t), void *p
 	skipWhiteSpace(pp); /* skip over any whitespace */
 
 finalize_it:
+	free(stringBuf);
 	RETiRet;
 }
 
@@ -500,15 +525,14 @@ finalize_it:
 static rsRetVal doGetWord(uchar **pp, rsRetVal (*pSetHdlr)(void*, uchar*), void *pVal)
 {
 	DEFiRet;
-	cstr_t *pStrB;
+	cstr_t *pStrB = NULL;
 	uchar *pNewVal;
 
 	ASSERT(pp != NULL);
 	ASSERT(*pp != NULL);
 
 	CHKiRet(getWord(pp, &pStrB));
-	CHKiRet(cstrConvSzStrAndDestruct(pStrB, &pNewVal, 0));
-	pStrB = NULL;
+	CHKiRet(cstrConvSzStrAndDestruct(&pStrB, &pNewVal, 0));
 
 	DBGPRINTF("doGetWord: get newval '%s' (len %d), hdlr %p\n",
 		  pNewVal, (int) ustrlen(pNewVal), pSetHdlr);
@@ -541,7 +565,8 @@ finalize_it:
  * time (TODO). -- rgerhards, 2008-02-14
  */
 static rsRetVal
-doSyslogName(uchar **pp, rsRetVal (*pSetHdlr)(void*, int), void *pVal, syslogName_t *pNameTable)
+doSyslogName(uchar **pp, rsRetVal (*pSetHdlr)(void*, int),
+	  	    void *pVal, syslogName_t *pNameTable)
 {
 	DEFiRet;
 	cstr_t *pStrB;
@@ -582,6 +607,15 @@ doFacility(uchar **pp, rsRetVal (*pSetHdlr)(void*, int), void *pVal)
 	RETiRet;
 }
 
+
+static rsRetVal
+doGoneAway(__attribute__((unused)) uchar **pp,
+	   __attribute__((unused)) rsRetVal (*pSetHdlr)(void*, int),
+	   __attribute__((unused)) void *pVal)
+{
+	errmsg.LogError(0, RS_RET_CMD_GONE_AWAY, "config directive is no longer supported -- ignored");
+	return RS_RET_CMD_GONE_AWAY;
+}
 
 /* Implements the severity syntax.
  * rgerhards, 2008-02-14
@@ -656,7 +690,7 @@ static int cslchKeyCompare(void *pKey1, void *pKey2)
 
 /* set data members for this object
  */
-rsRetVal cslchSetEntry(cslCmdHdlr_t *pThis, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData)
+rsRetVal cslchSetEntry(cslCmdHdlr_t *pThis, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, int *permitted)
 {
 	assert(pThis != NULL);
 	assert(eType != eCmdHdlrInvalid);
@@ -664,6 +698,7 @@ rsRetVal cslchSetEntry(cslCmdHdlr_t *pThis, ecslCmdHdrlType eType, rsRetVal (*pH
 	pThis->eType = eType;
 	pThis->cslCmdHdlr = pHdlr;
 	pThis->pData = pData;
+	pThis->permitted = permitted;
 
 	return RS_RET_OK;
 }
@@ -711,6 +746,9 @@ static rsRetVal cslchCallHdlr(cslCmdHdlr_t *pThis, uchar **ppConfLine)
 		break;
 	case eCmdHdlrGetWord:
 		pHdlr = doGetWord;
+		break;
+	case eCmdHdlrGoneAway:
+		pHdlr = doGoneAway;
 		break;
 	default:
 		iRet = RS_RET_NOT_IMPLEMENTED;
@@ -777,7 +815,7 @@ finalize_it:
 
 /* add a handler entry to a known command
  */
-static rsRetVal cslcAddHdlr(cslCmd_t *pThis, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie)
+static rsRetVal cslcAddHdlr(cslCmd_t *pThis, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie, int *permitted)
 {
 	DEFiRet;
 	cslCmdHdlr_t *pCmdHdlr = NULL;
@@ -785,7 +823,7 @@ static rsRetVal cslcAddHdlr(cslCmd_t *pThis, ecslCmdHdrlType eType, rsRetVal (*p
 	assert(pThis != NULL);
 
 	CHKiRet(cslchConstruct(&pCmdHdlr));
-	CHKiRet(cslchSetEntry(pCmdHdlr, eType, pHdlr, pData));
+	CHKiRet(cslchSetEntry(pCmdHdlr, eType, pHdlr, pData, permitted));
 	CHKiRet(llAppend(&pThis->llCmdHdlrs, pOwnerCookie, pCmdHdlr));
 
 finalize_it:
@@ -803,9 +841,16 @@ finalize_it:
  * buffer is automatically destroyed when the element is freed, the
  * caller does not need to take care of that. The caller must, however,
  * free pCmdName if he allocated it dynamically! -- rgerhards, 2007-08-09
+ * Parameter permitted has been added to support the v2 config system. With it,
+ * we can tell the legacy system (us here!) to check if a config directive is
+ * still permitted. For example, the v2 system will disable module global
+ * paramters if the are supplied via the native v2 callbacks. In order not
+ * to break exisiting modules, we have renamed the rgCfSysLinHdlr routine to
+ * version 2 and added a new one with the original name. It just calls the
+ * v2 function and supplies a "don't care (NULL)" pointer as this argument.
+ * rgerhards, 2012-06-26
  */
-rsRetVal regCfSysLineHdlr(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData,
-			  void *pOwnerCookie)
+rsRetVal regCfSysLineHdlr2(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie, int *permitted)
 {
 	DEFiRet;
 	cslCmd_t *pThis;
@@ -815,7 +860,7 @@ rsRetVal regCfSysLineHdlr(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlTy
 	if(iRet == RS_RET_NOT_FOUND) {
 		/* new command */
 		CHKiRet(cslcConstruct(&pThis, bChainingPermitted));
-		CHKiRet_Hdlr(cslcAddHdlr(pThis, eType, pHdlr, pData, pOwnerCookie)) {
+		CHKiRet_Hdlr(cslcAddHdlr(pThis, eType, pHdlr, pData, pOwnerCookie, permitted)) {
 			cslcDestruct(pThis);
 			FINALIZE;
 		}
@@ -835,13 +880,20 @@ rsRetVal regCfSysLineHdlr(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlTy
 		if(pThis->bChainingPermitted == 0 || bChainingPermitted == 0) {
 			ABORT_FINALIZE(RS_RET_CHAIN_NOT_PERMITTED);
 		}
-		CHKiRet_Hdlr(cslcAddHdlr(pThis, eType, pHdlr, pData, pOwnerCookie)) {
+		CHKiRet_Hdlr(cslcAddHdlr(pThis, eType, pHdlr, pData, pOwnerCookie, permitted)) {
 			cslcDestruct(pThis);
 			FINALIZE;
 		}
 	}
 
 finalize_it:
+	RETiRet;
+}
+
+rsRetVal regCfSysLineHdlr(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie)
+{
+	DEFiRet;
+	iRet = regCfSysLineHdlr2(pCmdName, bChainingPermitted, eType, pHdlr, pData, pOwnerCookie, NULL);
 	RETiRet;
 }
 
@@ -865,7 +917,7 @@ DEFFUNC_llExecFunc(unregHdlrsHeadExec)
 	int iNumElts;
 
 	/* first find element */
-	iRet = llFindAndDelete(&(pListHdr->llCmdHdlrs), pParam);
+	CHKiRet(llFindAndDelete(&(pListHdr->llCmdHdlrs), pParam));
 
 	/* now go back and check how many elements are left */
 	CHKiRet(llGetNumElts(&(pListHdr->llCmdHdlrs), &iNumElts));
@@ -910,11 +962,13 @@ rsRetVal processCfSysLineCommand(uchar *pCmdName, uchar **p)
 	uchar *pHdlrP; /* the handler's private p (else we could only call one handler) */
 	int bWasOnceOK; /* was the result of an handler at least once RS_RET_OK? */
 	uchar *pOKp = NULL; /* returned conf line pointer when it was OK */
+	int bHadScopingErr = 0; /* set if a scoping error occured */
 
 	iRet = llFind(&llCmdList, (void *) pCmdName, (void*) &pCmd);
 
 	if(iRet == RS_RET_NOT_FOUND) {
-		errmsg.LogError(0, RS_RET_NOT_FOUND, "invalid or yet-unknown config file command - have you forgotten to load a module?");
+		errmsg.LogError(0, RS_RET_NOT_FOUND, "invalid or yet-unknown config file command '%s' - "
+			"have you forgotten to load a module?", pCmdName);
 	}
 
 	if(iRet != RS_RET_OK)
@@ -927,11 +981,16 @@ rsRetVal processCfSysLineCommand(uchar *pCmdName, uchar **p)
 		 * reason is that handlers are independent. An error in one
 		 * handler does not necessarily mean that another one will
 		 * fail, too. Later, we might add a config variable to control
-		 * this behaviour (but I am not sure if that is rally
+		 * this behaviour (but I am not sure if that is really
 		 * necessary). -- rgerhards, 2007-07-31
 		 */
 		pHdlrP = *p;
-		if((iRet = cslchCallHdlr(pCmdHdlr, &pHdlrP)) == RS_RET_OK) {
+		if(pCmdHdlr->permitted != NULL && !*(pCmdHdlr->permitted)) {
+			errmsg.LogError(0, RS_RET_PARAM_NOT_PERMITTED, "command '%s' is currently not "
+				"permitted - did you already set it via a RainerScript command (v6+ config)?",
+				pCmdName);
+			ABORT_FINALIZE(RS_RET_PARAM_NOT_PERMITTED);
+		} else if((iRet = cslchCallHdlr(pCmdHdlr, &pHdlrP)) == RS_RET_OK) {
 			bWasOnceOK = 1;
 			pOKp = pHdlrP;
 		}
@@ -944,6 +1003,10 @@ rsRetVal processCfSysLineCommand(uchar *pCmdName, uchar **p)
 
 	if(iRetLL != RS_RET_END_OF_LINKEDLIST)
 		iRet = iRetLL;
+
+	if(bHadScopingErr) {
+		iRet = RS_RET_CONF_INVLD_SCOPE;
+	}
 
 finalize_it:
 	RETiRet;

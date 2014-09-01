@@ -1,13 +1,11 @@
 /* imdiag.c
- * This is a diagnostics module, primarily meant for troubleshooting
- * and information about the runtime state of rsyslog. It is implemented
- * as an input plugin, because that interface best suits our needs
- * and also enables us to inject test messages (something not yet
- * implemented).
+ * This is a testbench tool. It started out with a broader scope,
+ * but we dropped this idea. To learn about rsyslog runtime statistics
+ * have a look at impstats.
  *
  * File begun on 2008-07-25 by RGerhards
  *
- * Copyright 2008-2012 Adiscon GmbH.
+ * Copyright 2008-2014 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -53,6 +51,8 @@
 #include "srUtils.h"
 #include "msg.h"
 #include "datetime.h"
+#include "ratelimit.h"
+#include "queue.h"
 #include "net.h" /* for permittedPeers, may be removed when this is removed */
 
 MODULE_TYPE_INPUT
@@ -77,6 +77,10 @@ static prop_t *pRcvIPDummy = NULL;
 
 
 /* config settings */
+struct modConfData_s {
+	EMPTY_STRUCT;
+};
+
 static int iTCPSessMax = 20; /* max number of sessions */
 static int iStrmDrvrMode = 0; /* mode for stream driver, driver-dependent (0 mostly means plain tcp) */
 static uchar *pszStrmDrvrAuthMode = NULL; /* authentication mode to use */
@@ -195,7 +199,7 @@ finalize_it:
 /* actually submit a message to the rsyslog core
  */
 static rsRetVal
-doInjectMsg(int iNum)
+doInjectMsg(int iNum, ratelimit_t *ratelimiter)
 {
 	uchar szMsg[1024];
 	msg_t *pMsg;
@@ -215,7 +219,7 @@ doInjectMsg(int iNum)
 	pMsg->msgFlags  = NEEDS_PARSING | PARSE_HOSTNAME;
 	MsgSetRcvFrom(pMsg, pRcvDummy);
 	CHKiRet(MsgSetRcvFromIP(pMsg, pRcvIPDummy));
-	CHKiRet(submitMsg(pMsg));
+	CHKiRet(ratelimitAddMsg(ratelimiter, NULL, pMsg));
 
 finalize_it:
 	RETiRet;
@@ -233,6 +237,7 @@ injectMsg(uchar *pszCmd, tcps_sess_t *pSess)
 	int iFrom;
 	int nMsgs;
 	int i;
+	ratelimit_t *ratelimit = NULL;
 	DEFiRet;
 
 	/* we do not check errors here! */
@@ -240,47 +245,49 @@ injectMsg(uchar *pszCmd, tcps_sess_t *pSess)
 	iFrom = atoi((char*)wordBuf);
 	getFirstWord(&pszCmd, wordBuf, sizeof(wordBuf)/sizeof(uchar), TO_LOWERCASE);
 	nMsgs = atoi((char*)wordBuf);
+	CHKiRet(ratelimitNew(&ratelimit, "imdiag", "injectmsg"));
 
 	for(i = 0 ; i < nMsgs ; ++i) {
-		doInjectMsg(i + iFrom);
+		doInjectMsg(i + iFrom, ratelimit);
 	}
 
 	CHKiRet(sendResponse(pSess, "%d messages injected\n", nMsgs));
 	DBGPRINTF("imdiag: %d messages injected\n", nMsgs);
 
 finalize_it:
+	if(ratelimit != NULL)
+		ratelimitDestruct(ratelimit);
 	RETiRet;
 }
 
 
-/* This function waits until the main queue is drained (size = 0)
+/* This function waits until all queues are drained (size = 0)
  * To make sure it really is drained, we check three times. Otherwise we
  * may just see races.
+ * Note: until 2014--07-13, this checked just the main queue. However,
+ * the testbench was the sole user and checking all queues makes much more
+ * sense. So we change function semantics instead of carrying the old
+ * semantics over and crafting a new function. -- rgerhards
  */
 static rsRetVal
 waitMainQEmpty(tcps_sess_t *pSess)
 {
-	int iMsgQueueSize;
 	int iPrint = 0;
 	DEFiRet;
 
-	CHKiRet(diagGetMainMsgQSize(&iMsgQueueSize));
 	while(1) {
-		if(iMsgQueueSize == 0) {
+		if(iOverallQueueSize == 0) {
 			/* verify that queue is still empty (else it could just be a race!) */
 			srSleep(0,250000);/* wait a little bit */
-			CHKiRet(diagGetMainMsgQSize(&iMsgQueueSize));
-			if(iMsgQueueSize == 0) {
+			if(iOverallQueueSize == 0) {
 				srSleep(0,500000);/* wait a little bit */
-				CHKiRet(diagGetMainMsgQSize(&iMsgQueueSize));
 			}
 		}
-		if(iMsgQueueSize == 0)
+		if(iOverallQueueSize == 0)
 			break;
 		if(iPrint++ % 500 == 0) 
-			dbgprintf("imdiag sleeping, wait mainq drain, curr size %d\n", iMsgQueueSize);
+			dbgprintf("imdiag sleeping, wait queues drain, curr size %d\n", iOverallQueueSize);
 		srSleep(0,200000);/* wait a little bit */
-		CHKiRet(diagGetMainMsgQSize(&iMsgQueueSize));
 	}
 
 	CHKiRet(sendResponse(pSess, "mainqueue empty\n"));
@@ -296,7 +303,6 @@ finalize_it:
 static rsRetVal
 OnMsgReceived(tcps_sess_t *pSess, uchar *pRcv, int iLenMsg)
 {
-	int iMsgQueueSize;
 	uchar *pszMsg;
 	uchar *pToFree = NULL;
 	uchar cmdBuf[1024];
@@ -318,9 +324,8 @@ OnMsgReceived(tcps_sess_t *pSess, uchar *pRcv, int iLenMsg)
 
 	dbgprintf("imdiag received command '%s'\n", cmdBuf);
 	if(!ustrcmp(cmdBuf, UCHAR_CONSTANT("getmainmsgqueuesize"))) {
-		CHKiRet(diagGetMainMsgQSize(&iMsgQueueSize));
-		CHKiRet(sendResponse(pSess, "%d\n", iMsgQueueSize));
-		DBGPRINTF("imdiag: %d messages in main queue\n", iMsgQueueSize);
+		CHKiRet(sendResponse(pSess, "%d\n", iOverallQueueSize));
+		DBGPRINTF("imdiag: %d messages in main queue\n", iOverallQueueSize);
 	} else if(!ustrcmp(cmdBuf, UCHAR_CONSTANT("waitmainqueueempty"))) {
 		CHKiRet(waitMainQEmpty(pSess));
 	} else if(!ustrcmp(cmdBuf, UCHAR_CONSTANT("injectmsg"))) {
@@ -376,7 +381,8 @@ static rsRetVal addTCPListener(void __attribute__((unused)) *pVal, uchar *pNewVa
 	/* initialized, now add socket */
 	CHKiRet(tcpsrv.SetInputName(pOurTcpsrv, pszInputName == NULL ?
 						UCHAR_CONSTANT("imdiag") : pszInputName));
-	tcpsrv.configureTCPListen(pOurTcpsrv, pNewVal);
+	/* we support octect-cuunted frame (constant 1 below) */
+	tcpsrv.configureTCPListen(pOurTcpsrv, pNewVal, 1);
 
 finalize_it:
 	if(iRet != RS_RET_OK) {
@@ -384,8 +390,36 @@ finalize_it:
 		if(pOurTcpsrv != NULL)
 			tcpsrv.Destruct(&pOurTcpsrv);
 	}
+	free(pNewVal);
 	RETiRet;
 }
+
+
+#if 0 /* can be used to integrate into new config system */
+BEGINbeginCnfLoad
+CODESTARTbeginCnfLoad
+ENDbeginCnfLoad
+
+
+BEGINendCnfLoad
+CODESTARTendCnfLoad
+ENDendCnfLoad
+
+
+BEGINcheckCnf
+CODESTARTcheckCnf
+ENDcheckCnf
+
+
+BEGINactivateCnf
+CODESTARTactivateCnf
+ENDactivateCnf
+
+
+BEGINfreeCnf
+CODESTARTfreeCnf
+ENDfreeCnf
+#endif
 
 /* This function is called to gather input.
  */

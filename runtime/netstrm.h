@@ -49,11 +49,11 @@ BEGINinterface(netstrm) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*Send)(netstrm_t *pThis, uchar *pBuf, ssize_t *pLenBuf);
 	rsRetVal (*Connect)(netstrm_t *pThis, int family, unsigned char *port, unsigned char *host);
 	rsRetVal (*GetRemoteHName)(netstrm_t *pThis, uchar **pszName);
-	rsRetVal (*GetRemoteIP)(netstrm_t *pThis, uchar **pszIP);
+	rsRetVal (*GetRemoteIP)(netstrm_t *pThis, prop_t **ip);
 	rsRetVal (*SetDrvrMode)(netstrm_t *pThis, int iMode);
 	rsRetVal (*SetDrvrAuthMode)(netstrm_t *pThis, uchar*);
 	rsRetVal (*SetDrvrPermPeers)(netstrm_t *pThis, permittedPeers_t*);
-	void     (*CheckConnection)(netstrm_t *pThis);	/* This is a trick mostly for plain tcp syslog */
+	rsRetVal (*CheckConnection)(netstrm_t *pThis);	/* This is a trick mostly for plain tcp syslog */
 	/* the GetSock() below is a hack to make imgssapi work. In the long term,
 	 * we should migrate imgssapi to a stream driver, which will relieve us of
 	 * this problem. Please note that nobody else should use GetSock(). Using it 
@@ -72,9 +72,11 @@ BEGINinterface(netstrm) /* name must also be changed in ENDinterface macro! */
 	/* v4 */
 	rsRetVal (*EnableKeepAlive)(netstrm_t *pThis);
 ENDinterface(netstrm)
-#define netstrmCURR_IF_VERSION 4 /* increment whenever you change the interface structure! */
+#define netstrmCURR_IF_VERSION 6 /* increment whenever you change the interface structure! */
 /* interface version 3 added GetRemAddr()
  * interface version 4 added EnableKeepAlive() -- rgerhards, 2009-06-02
+ * interface version 5 changed return of CheckConnection from void to rsRetVal -- alorbach, 2012-09-06
+ * interface version 6 changed signature of GetRemoteIP() -- rgerhards, 2013-01-21
  * */
 
 /* prototypes */

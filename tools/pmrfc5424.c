@@ -6,24 +6,23 @@
  *
  * File begun on 2009-11-03 by RGerhards
  *
- * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -106,7 +105,7 @@ static int parseRFCField(uchar **pp2parse, uchar *pResult, int *pLenStr)
 
 	/* set the new parse pointer */
 	*pp2parse = p2parse;
-	return 0;
+	return iRet;
 }
 
 
@@ -191,7 +190,7 @@ static int parseRFCStructuredData(uchar **pp2parse, uchar *pResult, int *pLenStr
 	/* set the new parse pointer */
 	*pp2parse = p2parse;
 	*pLenStr = lenStr;
-	return 0;
+	return iRet;
 }
 
 /* parse a RFC5424-formatted syslog message. This function returns
@@ -227,7 +226,7 @@ CODESTARTparse
 		ABORT_FINALIZE(RS_RET_COULD_NOT_PARSE);
 	}
 	DBGPRINTF("Message has RFC5424/syslog-protocol format.\n");
-	setProtocolVersion(pMsg, 1);
+	setProtocolVersion(pMsg, MSG_RFC5424_PROTOCOL);
 	p2parse += 2;
 	lenMsg -= 2;
 

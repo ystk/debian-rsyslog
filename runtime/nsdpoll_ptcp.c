@@ -66,18 +66,21 @@ addEvent(nsdpoll_ptcp_t *pThis, int id, void *pUsr, int mode, nsd_ptcp_t *pSock,
 	nsdpoll_epollevt_lst_t *pNew;
 	DEFiRet;
 
-	CHKmalloc(pNew = (nsdpoll_epollevt_lst_t*) malloc(sizeof(nsdpoll_epollevt_lst_t)));
+	CHKmalloc(pNew = (nsdpoll_epollevt_lst_t*) calloc(1, sizeof(nsdpoll_epollevt_lst_t)));
 	pNew->id = id;
 	pNew->pUsr = pUsr;
 	pNew->pSock = pSock;
 	pNew->event.events = 0; /* TODO: at some time we should be able to use EPOLLET */
+	//pNew->event.events = EPOLLET;
 	if(mode & NSDPOLL_IN)
 		pNew->event.events |= EPOLLIN;
 	if(mode & NSDPOLL_OUT)
 		pNew->event.events |= EPOLLOUT;
-	pNew->event.data.u64 = (uint64) pNew;
+	pNew->event.data.ptr = pNew;
+	pthread_mutex_lock(&pThis->mutEvtLst);
 	pNew->pNext = pThis->pRoot;
 	pThis->pRoot = pNew;
+	pthread_mutex_unlock(&pThis->mutEvtLst);
 	*pEvtLst = pNew;
 
 finalize_it:
@@ -94,6 +97,7 @@ unlinkEvent(nsdpoll_ptcp_t *pThis, int id, void *pUsr, nsdpoll_epollevt_lst_t **
 	nsdpoll_epollevt_lst_t *pPrev = NULL;
 	DEFiRet;
 
+	pthread_mutex_lock(&pThis->mutEvtLst);
 	pEvtLst = pThis->pRoot;
 	while(pEvtLst != NULL && !(pEvtLst->id == id && pEvtLst->pUsr == pUsr)) {
 		pPrev = pEvtLst;
@@ -111,6 +115,7 @@ unlinkEvent(nsdpoll_ptcp_t *pThis, int id, void *pUsr, nsdpoll_epollevt_lst_t **
 		pPrev->pNext = pEvtLst->pNext;
 
 finalize_it:
+	pthread_mutex_unlock(&pThis->mutEvtLst);
 	RETiRet;
 }
 
@@ -147,13 +152,27 @@ BEGINobjConstruct(nsdpoll_ptcp) /* be sure to specify the object type also in EN
 		DBGPRINTF("epoll_create1() could not create fd\n");
 		ABORT_FINALIZE(RS_RET_IO_ERROR);
 	}
+	pthread_mutex_init(&pThis->mutEvtLst, NULL);
 finalize_it:
 ENDobjConstruct(nsdpoll_ptcp)
 
 
 /* destructor for the nsdpoll_ptcp object */
 BEGINobjDestruct(nsdpoll_ptcp) /* be sure to specify the object type also in END and CODESTART macros! */
+	nsdpoll_epollevt_lst_t *node;
+	nsdpoll_epollevt_lst_t *nextnode;
 CODESTARTobjDestruct(nsdpoll_ptcp)
+	/* we check if the epoll list still holds entries. This may happen, but
+	 * is a bit unusual.
+	 */
+	if(pThis->pRoot != NULL) {
+		for(node = pThis->pRoot ; node != NULL ; node = nextnode) {
+			nextnode = node->pNext;
+			dbgprintf("nsdpoll_ptcp destruct, need to destruct node %p\n", node);
+			delEvent(&node);
+		}
+	}
+	pthread_mutex_destroy(&pThis->mutEvtLst);
 ENDobjDestruct(nsdpoll_ptcp)
 
 
@@ -202,23 +221,25 @@ finalize_it:
 /* Wait for io to become ready. After the successful call, idRdy contains the
  * id set by the caller for that i/o event, ppUsr is a pointer to a location
  * where the user pointer shall be stored.
- * TODO: this is a trivial implementation that only polls one event at a time. We
- *       may later extend it to poll for multiple events, what would cause less 
- *       overhead.
+ * numEntries contains the maximum number of entries on entry and the actual
+ * number of entries actually read on exit.
  * rgerhards, 2009-11-18
  */
 static rsRetVal
-Wait(nsdpoll_t *pNsdpoll, int timeout, int *idRdy, void **ppUsr) {
+Wait(nsdpoll_t *pNsdpoll, int timeout, int *numEntries, nsd_epworkset_t workset[]) {
 	nsdpoll_ptcp_t *pThis = (nsdpoll_ptcp_t*) pNsdpoll;
 	nsdpoll_epollevt_lst_t *pOurEvt;
-	struct epoll_event event;
+	struct epoll_event event[128];
 	int nfds;
+	int i;
 	DEFiRet;
 
-	assert(idRdy != NULL);
-	assert(ppUsr != NULL);
+	assert(workset != NULL);
 
-	nfds = epoll_wait(pThis->efd, &event, 1, timeout);
+	if(*numEntries > 128)
+		*numEntries = 128;
+	DBGPRINTF("doing epoll_wait for max %d events\n", *numEntries);
+	nfds = epoll_wait(pThis->efd, event, *numEntries, timeout);
 	if(nfds == -1) {
 		if(errno == EINTR) {
 			ABORT_FINALIZE(RS_RET_EINTR);
@@ -230,10 +251,15 @@ Wait(nsdpoll_t *pNsdpoll, int timeout, int *idRdy, void **ppUsr) {
 		ABORT_FINALIZE(RS_RET_TIMEOUT);
 	}
 
-	/* we got a valid event, so tell the caller... */
-	pOurEvt = (nsdpoll_epollevt_lst_t*) event.data.u64;
-	*idRdy = pOurEvt->id;
-	*ppUsr = pOurEvt->pUsr;
+	/* we got valid events, so tell the caller... */
+dbgprintf("epoll returned %d entries\n", nfds);
+	for(i = 0 ; i < nfds ; ++i) {
+		pOurEvt = (nsdpoll_epollevt_lst_t*) event[i].data.ptr;
+		workset[i].id = pOurEvt->id;
+		workset[i].pUsr = pOurEvt->pUsr;
+dbgprintf("epoll push ppusr[%d]: %p\n", i, pOurEvt->pUsr);
+	}
+	*numEntries = nfds;
 
 finalize_it:
 	RETiRet;

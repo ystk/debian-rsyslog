@@ -3,7 +3,7 @@
  *
  * File begun on 2007-07-13 by RGerhards (extracted from syslogd.c)
  *
- * Copyright 2007-2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -29,11 +29,13 @@
 #define	MSG_H_INCLUDED 1
 
 #include <pthread.h>
+#include <libestr.h>
+#include <stdint.h>
+#include <json.h>
 #include "obj.h"
 #include "syslogd-types.h"
 #include "template.h"
 #include "atomic.h"
-
 
 /* rgerhards 2004-11-08: The following structure represents a
  * syslog message. 
@@ -61,8 +63,7 @@ struct msg {
 				        once data has entered the queue, this property is no longer needed. */
 	pthread_mutex_t mut;
 	int	iRefCount;	/* reference counter (0 = unused) */
-	sbool	bDoLock;	/* use the mutex? */
-	sbool	bAlreadyFreed;	/* aid to help detect a well-hidden bad bug -- TODO: remove when no longer needed */
+	sbool	bParseSuccess;	/* set to reflect state of last executed higher level parser */
 	short	iSeverity;	/* the severity 0..7 */
 	short	iFacility;	/* Facility code 0 .. 23*/
 	short	offAfterPRI;	/* offset, at which raw message WITHOUT PRI part starts in pszRawMsg */
@@ -73,6 +74,7 @@ struct msg {
 	int	iLenMSG;	/* Length of the MSG part */
 	int	iLenTAG;	/* Length of the TAG part */
 	int	iLenHOSTNAME;	/* Length of HOSTNAME */
+	int	iLenPROGNAME;	/* Length of PROGNAME (-1 = not yet set) */
 	uchar	*pszRawMsg;	/* message as it was received on the wire. This is important in case we
 				 * need to preserve cryptographic verifiers.  */
 	uchar	*pszHOSTNAME;	/* HOSTNAME from syslog message */
@@ -84,8 +86,8 @@ struct msg {
 	char *pszTIMESTAMP3339;	/* TIMESTAMP as RFC3339 formatted string (32 charcters at most) */
 	char *pszTIMESTAMP_MySQL;/* TIMESTAMP as MySQL formatted string (always 14 charcters) */
         char *pszTIMESTAMP_PgSQL;/* TIMESTAMP as PgSQL formatted string (always 21 characters) */
-	cstr_t *pCSProgName;	/* the (BSD) program name */
-	cstr_t *pCSStrucData;   /* STRUCTURED-DATA */
+	uchar *pszStrucData;    /* STRUCTURED-DATA */
+	uint16_t lenStrucData;	/* (cached) length of STRUCTURED-DATA */
 	cstr_t *pCSAPPNAME;	/* APP-NAME */
 	cstr_t *pCSPROCID;	/* PROCID */
 	cstr_t *pCSMSGID;	/* MSGID */
@@ -106,9 +108,15 @@ struct msg {
 				   it obviously is solved in way or another...). */
 	struct syslogTime tRcvdAt;/* time the message entered this program */
 	struct syslogTime tTIMESTAMP;/* (parsed) value of the timestamp */
+	struct json_object *json;
+	struct json_object *localvars;
 	/* some fixed-size buffers to save malloc()/free() for frequently used fields (from the default templates) */
 	uchar szRawMsg[CONF_RAWMSG_BUFSIZE];	/* most messages are small, and these are stored here (without malloc/free!) */
 	uchar szHOSTNAME[CONF_HOSTNAME_BUFSIZE];
+	union {
+		uchar	*ptr;	/* pointer to progname value */
+		uchar	szBuf[CONF_PROGNAME_BUFSIZE];
+	} PROGNAME;
 	union {
 		uchar	*pszTAG;	/* pointer to tag value */
 		uchar	szBuf[CONF_TAG_BUFSIZE];
@@ -117,6 +125,10 @@ struct msg {
 	char pszTimestamp3339[CONST_LEN_TIMESTAMP_3339 + 1];
 	char pszTIMESTAMP_SecFrac[7]; /* Note: a pointer is 64 bits/8 char, so this is actually fewer than a pointer! */
 	char pszRcvdAt_SecFrac[7];	     /* same as above. Both are fractional seconds for their respective timestamp */
+	char pszTIMESTAMP_Unix[12]; /* almost as small as a pointer! */
+	char pszRcvdAt_Unix[12];
+	char dfltTZ[8];	    /* 7 chars max, less overhead than ptr! */
+	uchar *pszUUID; /* The message's UUID */
 };
 
 
@@ -133,71 +145,92 @@ struct msg {
 #define NEEDS_ACLCHK_U	0x080	/* check UDP ACLs after DNS resolution has been done in main queue consumer */
 #define NO_PRI_IN_RAW	0x100	/* rawmsg does not include a PRI (Solaris!), but PRI is already set correctly in the msg object */
 
+/* (syslog) protocol types */
+#define MSG_LEGACY_PROTOCOL 0
+#define MSG_RFC5424_PROTOCOL 1
 
 /* function prototypes
  */
 PROTOTYPEObjClassInit(msg);
 rsRetVal msgConstruct(msg_t **ppThis);
 rsRetVal msgConstructWithTime(msg_t **ppThis, struct syslogTime *stTime, time_t ttGenTime);
+rsRetVal msgConstructForDeserializer(msg_t **ppThis);
+rsRetVal msgConstructFinalizer(msg_t *pThis);
 rsRetVal msgDestruct(msg_t **ppM);
 msg_t* MsgDup(msg_t* pOld);
 msg_t *MsgAddRef(msg_t *pM);
 void setProtocolVersion(msg_t *pM, int iNewVersion);
 void MsgSetInputName(msg_t *pMsg, prop_t*);
-rsRetVal MsgSetAPPNAME(msg_t *pMsg, char* pszAPPNAME);
-rsRetVal MsgSetPROCID(msg_t *pMsg, char* pszPROCID);
-rsRetVal MsgSetMSGID(msg_t *pMsg, char* pszMSGID);
-void MsgSetTAG(msg_t *pMsg, uchar* pszBuf, size_t lenBuf);
+void MsgSetDfltTZ(msg_t *pThis, char *tz);
+rsRetVal MsgSetAPPNAME(msg_t *pMsg, const char* pszAPPNAME);
+rsRetVal MsgSetPROCID(msg_t *pMsg, const char* pszPROCID);
+rsRetVal MsgSetMSGID(msg_t *pMsg, const char* pszMSGID);
+void MsgSetParseSuccess(msg_t *pMsg, int bSuccess);
+void MsgSetTAG(msg_t *pMsg, const uchar* pszBuf, const size_t lenBuf);
 void MsgSetRuleset(msg_t *pMsg, ruleset_t*);
 rsRetVal MsgSetFlowControlType(msg_t *pMsg, flowControl_t eFlowCtl);
-rsRetVal MsgSetStructuredData(msg_t *pMsg, char* pszStrucData);
+rsRetVal MsgSetStructuredData(msg_t *const pMsg, const char* pszStrucData);
+rsRetVal MsgAddToStructuredData(msg_t *pMsg, uchar *toadd, rs_size_t len);
+void MsgGetStructuredData(msg_t *pM, uchar **pBuf, rs_size_t *len);
 rsRetVal msgSetFromSockinfo(msg_t *pThis, struct sockaddr_storage *sa);
 void MsgSetRcvFrom(msg_t *pMsg, prop_t*);
-void MsgSetRcvFromStr(msg_t *pMsg, uchar* pszRcvFrom, int, prop_t **);
+void MsgSetRcvFromStr(msg_t *const pMsg, const uchar* pszRcvFrom, const int, prop_t **);
 rsRetVal MsgSetRcvFromIP(msg_t *pMsg, prop_t*);
-rsRetVal MsgSetRcvFromIPStr(msg_t *pThis, uchar *psz, int len, prop_t **ppProp);
-void MsgSetHOSTNAME(msg_t *pMsg, uchar* pszHOSTNAME, int lenHOSTNAME);
+rsRetVal MsgSetRcvFromIPStr(msg_t *const pThis, const uchar *psz, const int len, prop_t **ppProp);
+void MsgSetHOSTNAME(msg_t *pMsg, const uchar* pszHOSTNAME, const int lenHOSTNAME);
 rsRetVal MsgSetAfterPRIOffs(msg_t *pMsg, short offs);
 void MsgSetMSGoffs(msg_t *pMsg, short offs);
 void MsgSetRawMsgWOSize(msg_t *pMsg, char* pszRawMsg);
-void MsgSetRawMsg(msg_t *pMsg, char* pszRawMsg, size_t lenMsg);
-rsRetVal MsgReplaceMSG(msg_t *pThis, uchar* pszMSG, int lenMSG);
-uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe,
-                 propid_t propID, size_t *pPropLen, unsigned short *pbMustBeFreed);
-char *textpri(char *pRes, size_t pResLen, int pri);
-rsRetVal msgGetMsgVar(msg_t *pThis, cstr_t *pstrPropName, var_t **ppVar);
-rsRetVal MsgEnableThreadSafety(void);
+void MsgSetRawMsg(msg_t *pMsg, const char* pszRawMsg, size_t lenMsg);
+rsRetVal MsgReplaceMSG(msg_t *pThis, const uchar* pszMSG, int lenMSG);
+uchar *MsgGetProp(msg_t *pMsg, struct templateEntry *pTpe, msgPropDescr_t *pProp,
+		  rs_size_t *pPropLen, unsigned short *pbMustBeFreed, struct syslogTime *ttNow);
 uchar *getRcvFrom(msg_t *pM);
 void getTAG(msg_t *pM, uchar **ppBuf, int *piLen);
 char *getTimeReported(msg_t *pM, enum tplFormatTypes eFmt);
 char *getPRI(msg_t *pMsg);
-
+void getRawMsg(msg_t *pM, uchar **pBuf, int *piLen);
+rsRetVal msgAddJSON(msg_t *pM, uchar *name, struct json_object *json);
+rsRetVal MsgGetSeverity(msg_t *pThis, int *piSeverity);
+rsRetVal MsgDeserialize(msg_t *pMsg, strm_t *pStrm);
+rsRetVal MsgSetPropsViaJSON(msg_t *__restrict__ const pMsg, const uchar *__restrict__ const json);
+const uchar* msgGetJSONMESG(msg_t *__restrict__ const pMsg);
 
 /* TODO: remove these five (so far used in action.c) */
 uchar *getMSG(msg_t *pM);
 char *getHOSTNAME(msg_t *pM);
 char *getPROCID(msg_t *pM, sbool bLockMutex);
 char *getAPPNAME(msg_t *pM, sbool bLockMutex);
+void setMSGLen(msg_t *pM, int lenMsg);
 int getMSGLen(msg_t *pM);
 
 char *getHOSTNAME(msg_t *pM);
 int getHOSTNAMELen(msg_t *pM);
 uchar *getProgramName(msg_t *pM, sbool bLockMutex);
-int getProgramNameLen(msg_t *pM, sbool bLockMutex);
 uchar *getRcvFrom(msg_t *pM);
-rsRetVal propNameToID(cstr_t *pCSPropName, propid_t *pPropID);
+rsRetVal propNameToID(uchar *pName, propid_t *pPropID);
 uchar *propIDToName(propid_t propID);
+rsRetVal msgGetJSONPropJSON(msg_t *pMsg, msgPropDescr_t *pProp, struct json_object **pjson);
+rsRetVal getJSONPropVal(msg_t *pMsg, msgPropDescr_t *pProp, uchar **pRes, rs_size_t *buflen, unsigned short *pbMustBeFreed);
+rsRetVal msgSetJSONFromVar(msg_t *pMsg, uchar *varname, struct var *var);
+rsRetVal msgDelJSON(msg_t *pMsg, uchar *varname);
+rsRetVal jsonFind(struct json_object *jroot, msgPropDescr_t *pProp, struct json_object **jsonres);
 
+rsRetVal msgPropDescrFill(msgPropDescr_t *pProp, uchar *name, int nameLen);
+void msgPropDescrDestruct(msgPropDescr_t *pProp);
 
-/* The MsgPrepareEnqueue() function is a macro for performance reasons.
- * It needs one global variable to work. This is acceptable, as it gains
- * us quite some performance and is fully abstracted using this header file.
- * The important thing is that no other module is permitted to actually
- * access that global variable! -- rgerhards, 2008-01-05
- */
-extern void (*funcMsgPrepareEnqueue)(msg_t *pMsg);
-#define MsgPrepareEnqueue(pMsg) funcMsgPrepareEnqueue(pMsg)
+static inline int
+msgGetProtocolVersion(msg_t *pM)
+{
+	return(pM->iProtocolVersion);
+}
 
+/* returns non-zero if the message has structured data, 0 otherwise */
+static inline sbool
+MsgHasStructuredData(msg_t *pM)
+{
+	return (pM->pszStrucData == NULL) ? 0 : 1;
+}
 
 /* ------------------------------ some inline functions ------------------------------ */
 

@@ -3,11 +3,20 @@
 /* Defined if debug mode is enabled (its easier to check). */
 #undef DEBUG
 
+/* Defined if debugless mode is enabled. */
+#undef DEBUGLESS
+
+/* Indicator that GnuTLS is present */
+#undef ENABLE_GNUTLS
+
+/* Indicator that IMDIAG is present */
+#undef ENABLE_IMDIAG
+
+/* Indicator that LIBGCRYPT is present */
+#undef ENABLE_LIBGCRYPT
+
 /* Regular expressions support enabled. */
 #undef FEATURE_REGEXP
-
-/* Description */
-#undef FSSTND
 
 /* Define to 1 if you have the `alarm' function. */
 #undef HAVE_ALARM
@@ -22,10 +31,13 @@
 #undef HAVE_ATOMIC_BUILTINS
 
 /* Define if compiler provides 64 bit atomic builtins */
-#undef HAVE_ATOMIC_BUILTINS_64BIT
+#undef HAVE_ATOMIC_BUILTINS64
 
 /* Define to 1 if you have the `basename' function. */
 #undef HAVE_BASENAME
+
+/* Define to 1 if compiler supports __builtin_expect */
+#undef HAVE_BUILTIN_EXPECT
 
 /* Define to 1 if your system has a working `chown' function. */
 #undef HAVE_CHOWN
@@ -38,6 +50,9 @@
 
 /* Define to 1 if libdbi supports the new plugin-safe interface */
 #undef HAVE_DBI_R
+
+/* Define to 1 if libdbi supports transactions */
+#undef HAVE_DBI_TXSUPP
 
 /* Define to 1 if you have the declaration of `strerror_r', and to 0 if you
    don't. */
@@ -73,17 +88,44 @@
 /* Define to 1 if you have the `gethostname' function. */
 #undef HAVE_GETHOSTNAME
 
+/* set define */
+#undef HAVE_GETIFADDRS
+
 /* Define to 1 if you have the `getline' function. */
 #undef HAVE_GETLINE
 
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
+/* set define */
+#undef HAVE_GLOB_NOMAGIC
+
+/* Define to 1 if you have the <hadoop/hdfs.h> header file. */
+#undef HAVE_HADOOP_HDFS_H
+
+/* Define to 1 if you have the <hdfs.h> header file. */
+#undef HAVE_HDFS_H
+
+/* Define to 1 if you have the `inotify_init' function. */
+#undef HAVE_INOTIFY_INIT
+
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
+/* jemalloc support is integrated. */
+#undef HAVE_JEMALLOC
+
+/* Define to 1 if you have the `json_object_new_int64' function. */
+#undef HAVE_JSON_OBJECT_NEW_INT64
+
+/* we have the newer JSON-C API */
+#undef HAVE_JSON_TOKENER_ERROR_DESC
+
 /* Define to 1 if you have the <libgen.h> header file. */
 #undef HAVE_LIBGEN_H
+
+/* Define to 1 if you have the `json-c' library (-ljson-c). */
+#undef HAVE_LIBJSON_C
 
 /* Define to 1 if you have the <libnet.h> header file. */
 #undef HAVE_LIBNET_H
@@ -128,6 +170,9 @@
 /* Define to 1 if you have the <net-snmp/net-snmp-config.h> header file. */
 #undef HAVE_NET_SNMP_NET_SNMP_CONFIG_H
 
+/* Define to 1 if the system has the type `off64_t'. */
+#undef HAVE_OFF64_T
+
 /* Define to 1 if you have the <paths.h> header file. */
 #undef HAVE_PATHS_H
 
@@ -143,6 +188,9 @@
 /* Define to 1 if your system has a GNU libc compatible `realloc' function,
    and to 0 otherwise. */
 #undef HAVE_REALLOC
+
+/* Define to 1 if you have the `recvmmsg' function. */
+#undef HAVE_RECVMMSG
 
 /* Define to 1 if you have the `regcomp' function. */
 #undef HAVE_REGCOMP
@@ -165,11 +213,14 @@
 /* Define to 1 if you have the <semaphore.h> header file. */
 #undef HAVE_SEMAPHORE_H
 
-/* Define to 1 if you have the `setid' function. */
-#undef HAVE_SETID
+/* Define to 1 if you have the `setsid' function. */
+#undef HAVE_SETSID
 
 /* Define to 1 if you have the `socket' function. */
 #undef HAVE_SOCKET
+
+/* set define */
+#undef HAVE_SO_TIMESTAMP
 
 /* Define to 1 if `stat' has the bug that it succeeds when given the
    zero-length file name argument. */
@@ -226,6 +277,12 @@
 /* Define to 1 if `sa_len' is a member of `struct sockaddr'. */
 #undef HAVE_STRUCT_SOCKADDR_SA_LEN
 
+/* Define to 1 if you have the `syscall' function. */
+#undef HAVE_SYSCALL
+
+/* set define */
+#undef HAVE_SYSINFO_UPTIME
+
 /* Define to 1 if you have the <syslog.h> header file. */
 #undef HAVE_SYSLOG_H
 
@@ -234,6 +291,9 @@
 
 /* Define to 1 if you have the <sys/file.h> header file. */
 #undef HAVE_SYS_FILE_H
+
+/* Define to 1 if you have the <sys/inotify.h> header file. */
+#undef HAVE_SYS_INOTIFY_H
 
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
@@ -253,6 +313,9 @@
 /* Define to 1 if you have the <sys/stat.h> header file. */
 #undef HAVE_SYS_STAT_H
 
+/* Define to 1 if you have the <sys/syscall.h> header file. */
+#undef HAVE_SYS_SYSCALL_H
+
 /* Define to 1 if you have the <sys/time.h> header file. */
 #undef HAVE_SYS_TIME_H
 
@@ -262,11 +325,11 @@
 /* Define to 1 if you have <sys/wait.h> that is POSIX.1 compatible. */
 #undef HAVE_SYS_WAIT_H
 
+/* set define */
+#undef HAVE_SYS_gettid
+
 /* Define to 1 if you have the `ttyname_r' function. */
 #undef HAVE_TTYNAME_R
-
-/* Define to 1 if typeof works with your compiler. */
-#undef HAVE_TYPEOF
 
 /* Define to 1 if you have the `uname' function. */
 #undef HAVE_UNAME
@@ -322,6 +385,9 @@
 /* Indicator for a BSD OS */
 #undef OS_BSD
 
+/* Indicator for a Linux OS */
+#undef OS_LINUX
+
 /* Indicator for a Solaris OS */
 #undef OS_SOLARIS
 
@@ -370,9 +436,6 @@
 /* network support is integrated. */
 #undef SYSLOG_INET
 
-/* Description */
-#undef SYSLOG_UNIXAF
-
 /* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
 #undef TIME_WITH_SYS_TIME
 
@@ -381,6 +444,9 @@
 
 /* Define if you want to use GSSAPI */
 #undef USE_GSSAPI
+
+/* Define if you want to enable libuuid support */
+#undef USE_LIBUUID
 
 /* Define if you want to enable zlib support */
 #undef USE_NETZIP
@@ -420,6 +486,10 @@
 
 /* Version number of package */
 #undef VERSION
+
+/* Define to 1 if `lex' declares `yytext' as a `char *' by default, not a
+   `char[]'. */
+#undef YYTEXT_POINTER
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS
@@ -477,9 +547,6 @@
 
 /* Define to `int' if <sys/types.h> does not define. */
 #undef ssize_t
-
-/* Define to __typeof__ if your compiler spells it that way. */
-#undef typeof
 
 /* Define to `int' if <sys/types.h> doesn't define. */
 #undef uid_t

@@ -9,7 +9,7 @@
  *
  * Begun 2009-05-21 RGerhards
  *
- * Copyright (C) 2009-2012 by Rainer Gerhards and Adiscon GmbH
+ * Copyright (C) 2009-2014 by Rainer Gerhards and Adiscon GmbH
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -36,26 +36,26 @@
 #	define ustrncpy(psz1, psz2, len) strncpy((char*)(psz1), (char*)(psz2), (len))
 #	define ustrdup(psz) (uchar*)strdup((char*)(psz))
 #else
-	static inline uchar* ustrncpy(uchar *psz1, uchar *psz2, size_t len)
+	static inline uchar* ustrncpy(uchar *psz1, const uchar *psz2, size_t len)
 	{
-		return (uchar*) strncpy((char*) psz1, (char*) psz2, len);
+		return (uchar*) strncpy((char*) psz1, (const char*) psz2, len);
 	}
 
-	static inline uchar* ustrdup(uchar *psz)
+	static inline uchar* ustrdup(const uchar *psz)
 	{
-		return (uchar*) strdup((char*)psz);
+		return (uchar*) strdup((const char*)psz);
 	}
 
 #endif /* #ifdef DEBUG */
 
-static inline int ustrcmp(uchar *psz1, uchar *psz2)
+static inline int ustrcmp(const uchar *psz1, const uchar *psz2)
 {
-	return strcmp((char*) psz1, (char*) psz2);
+	return strcmp((const char*) psz1, (const char*) psz2);
 }
 
-static inline int ustrlen(uchar *psz)
+static inline int ustrlen(const uchar *psz)
 {
-	return strlen((char*) psz);
+	return strlen((const char*) psz);
 }
 
 

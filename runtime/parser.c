@@ -57,12 +57,9 @@ DEFobjCurrIf(ruleset)
 
 /* static data */
 
-/* config data */
-static uchar cCCEscapeChar = '#';/* character to be used to start an escape sequence for control chars */
-static int bEscapeCCOnRcv = 1; /* escape control characters on reception: 0 - no, 1 - yes */
-static int bEscape8BitChars = 0; /* escape characters > 127 on reception: 0 - no, 1 - yes */
-static int bEscapeTab = 1;	/* escape tab control character when doing CC escapes: 0 - no, 1 - yes */
-static int bDropTrailingLF = 1; /* drop trailing LF's on reception? */
+static char hexdigit[16] =
+	{'0', '1', '2', '3', '4', '5', '6', '7', '8',
+	 '9', 'A', 'B', 'C', 'D', 'E', 'F' };
 
 /* This is the list of all parsers known to us.
  * This is also used to unload all modules on shutdown.
@@ -137,11 +134,19 @@ AddParserToList(parserList_t **ppListRoot, parser_t *pParser)
 		/* add at tail */
 		pTail->pNext = pThis;
 	}
-
+DBGPRINTF("DDDDD: added parser '%s' to list %p\n", pParser->pName, ppListRoot);
 finalize_it:
 	RETiRet;
 }
 
+void
+printParserList(parserList_t *pList)
+{
+	while(pList != NULL) {
+		dbgprintf("parser: %s\n", pList->pParser->pName);
+		pList = pList->pNext;
+	}
+}
 
 /* find a parser based on the provided name */
 static rsRetVal
@@ -179,11 +184,73 @@ AddDfltParser(uchar *pName)
 
 	CHKiRet(FindParser(&pParser, pName));
 	CHKiRet(AddParserToList(&pDfltParsLst, pParser));
-	dbgprintf("Parser '%s' added to default parser set.\n", pName);
+	DBGPRINTF("Parser '%s' added to default parser set.\n", pName);
 	
 finalize_it:
 	RETiRet;
 }
+
+
+/* set the parser name - string is copied over, call can continue to use it,
+ * but must free it if desired.
+ */
+static rsRetVal
+SetName(parser_t *pThis, uchar *name)
+{
+	DEFiRet;
+
+	ISOBJ_TYPE_assert(pThis, parser);
+	assert(name != NULL);
+
+	if(pThis->pName != NULL) {
+		free(pThis->pName);
+		pThis->pName = NULL;
+	}
+
+	CHKmalloc(pThis->pName = ustrdup(name));
+
+finalize_it:
+	RETiRet;
+}
+
+
+/* set a pointer to "our" module. Note that no module
+ * pointer must already be set.
+ */
+static rsRetVal
+SetModPtr(parser_t *pThis, modInfo_t *pMod)
+{
+	ISOBJ_TYPE_assert(pThis, parser);
+	assert(pMod != NULL);
+	assert(pThis->pModule == NULL);
+	pThis->pModule = pMod;
+	return RS_RET_OK;
+}
+
+
+/* Specify if we should do standard message sanitazion before we pass the data
+ * down to the parser.
+ */
+static rsRetVal
+SetDoSanitazion(parser_t *pThis, int bDoIt)
+{
+	ISOBJ_TYPE_assert(pThis, parser);
+	pThis->bDoSanitazion = bDoIt;
+	return RS_RET_OK;
+}
+
+
+/* Specify if we should do standard PRI parsing before we pass the data
+ * down to the parser module.
+ */
+static rsRetVal
+SetDoPRIParsing(parser_t *pThis, int bDoIt)
+{
+	ISOBJ_TYPE_assert(pThis, parser);
+	pThis->bDoPRIParsing = bDoIt;
+	return RS_RET_OK;
+}
+
 
 
 
@@ -206,9 +273,46 @@ finalize_it:
 	RETiRet;
 }
 
+
+/* construct a parser object via a pointer to the parser module
+ * and the name. This is a separate function because we need it
+ * in multiple spots inside the code.
+ */
+rsRetVal
+parserConstructViaModAndName(modInfo_t *__restrict__ pMod, uchar *const __restrict__ pName, void *pInst)
+{
+	rsRetVal localRet;
+	parser_t *pParser;
+	DEFiRet;
+
+	if(pInst == NULL && pMod->mod.pm.newParserInst != NULL) {
+		/* this happens for the default instance on ModLoad time */
+		CHKiRet(pMod->mod.pm.newParserInst(NULL, &pInst));
+	}
+	CHKiRet(parserConstruct(&pParser));
+	/* check some features */
+	localRet = pMod->isCompatibleWithFeature(sFEATUREAutomaticSanitazion);
+	if(localRet == RS_RET_OK){
+		CHKiRet(SetDoSanitazion(pParser, RSTRUE));
+	}
+	localRet = pMod->isCompatibleWithFeature(sFEATUREAutomaticPRIParsing);
+	if(localRet == RS_RET_OK){
+		CHKiRet(SetDoPRIParsing(pParser, RSTRUE));
+	}
+
+	CHKiRet(SetName(pParser, pName));
+	CHKiRet(SetModPtr(pParser, pMod));
+	pParser->pInst = pInst;
+	CHKiRet(parserConstructFinalize(pParser));
+finalize_it:
+	RETiRet;
+}
 BEGINobjDestruct(parser) /* be sure to specify the object type also in END and CODESTART macros! */
 CODESTARTobjDestruct(parser)
-	dbgprintf("destructing parser '%s'\n", pThis->pName);
+	DBGPRINTF("destructing parser '%s'\n", pThis->pName);
+	if(pThis->pInst != NULL) {
+		pThis->pModule->mod.pm.freeParserInst(pThis->pInst);
+	}
 	free(pThis->pName);
 ENDobjDestruct(parser)
 
@@ -310,7 +414,8 @@ SanitizeMsg(msg_t *pMsg)
 	size_t iDst;
 	size_t iMaxLine;
 	size_t maxDest;
-	sbool bUpdatedLen = FALSE;
+	uchar pc;
+	sbool bUpdatedLen = RSFALSE;
 	uchar szSanBuf[32*1024]; /* buffer used for sanitizing a string */
 
 	assert(pMsg != NULL);
@@ -325,7 +430,7 @@ SanitizeMsg(msg_t *pMsg)
 	 */
 	if(pszMsg[lenMsg-1] == '\0') {
 		DBGPRINTF("dropped NUL at very end of message\n");
-		bUpdatedLen = TRUE;
+		bUpdatedLen = RSTRUE;
 		lenMsg--;
 	}
 
@@ -334,11 +439,11 @@ SanitizeMsg(msg_t *pMsg)
 	 * compatible to recent IETF developments, we allow the user to
 	 * turn on/off this handling.  rgerhards, 2007-07-23
 	 */
-	if(bDropTrailingLF && pszMsg[lenMsg-1] == '\n') {
+	if(glbl.GetParserDropTrailingLFOnReception() && pszMsg[lenMsg-1] == '\n') {
 		DBGPRINTF("dropped LF at very end of message (DropTrailingLF is set)\n");
 		lenMsg--;
 		pszMsg[lenMsg] = '\0';
-		bUpdatedLen = TRUE;
+		bUpdatedLen = RSTRUE;
 	}
 
 	/* it is much quicker to sweep over the message and see if it actually
@@ -353,56 +458,121 @@ SanitizeMsg(msg_t *pMsg)
 	 */
 	int bNeedSanitize = 0;
 	for(iSrc = 0 ; iSrc < lenMsg ; iSrc++) {
-		if(iscntrl(pszMsg[iSrc])) {
-			if(pszMsg[iSrc] == '\0' || bEscapeCCOnRcv) {
+		if(pszMsg[iSrc] < 32) {
+			if(glbl.GetParserSpaceLFOnReceive() && pszMsg[iSrc] == '\n') {
+				pszMsg[iSrc] = ' ';
+			} else if(pszMsg[iSrc] == '\0' || glbl.GetParserEscapeControlCharactersOnReceive()) {
 				bNeedSanitize = 1;
-				break;
+				if (!glbl.GetParserSpaceLFOnReceive()) {
+					break;
+			    }
 			}
-		} else if(pszMsg[iSrc] > 127 && bEscape8BitChars) {
+		} else if(pszMsg[iSrc] > 127 && glbl.GetParserEscape8BitCharactersOnReceive()) {
 			bNeedSanitize = 1;
 			break;
 		}
 	}
 
 	if(!bNeedSanitize) {
-		if(bUpdatedLen == TRUE)
+		if(bUpdatedLen == RSTRUE)
 			MsgSetRawMsgSize(pMsg, lenMsg);
 		FINALIZE;
 	}
 
-	/* now copy over the message and sanitize it */
+	/* now copy over the message and sanitize it. Note that up to iSrc-1 there was
+	 * obviously no need to sanitize, so we can go over that quickly...
+	 */
 	iMaxLine = glbl.GetMaxLine();
 	maxDest = lenMsg * 4; /* message can grow at most four-fold */
+
 	if(maxDest > iMaxLine)
 		maxDest = iMaxLine;	/* but not more than the max size! */
 	if(maxDest < sizeof(szSanBuf))
 		pDst = szSanBuf;
 	else 
 		CHKmalloc(pDst = MALLOC(sizeof(uchar) * (iMaxLine + 1)));
-	iSrc = iDst = 0;
+	if(iSrc > 0) {
+		iSrc--; /* go back to where everything is OK */
+		memcpy(pDst, pszMsg, iSrc); /* fast copy known good */
+	}
+	iDst = iSrc;
 	while(iSrc < lenMsg && iDst < maxDest - 3) { /* leave some space if last char must be escaped */
-		if(iscntrl((int) pszMsg[iSrc]) && (pszMsg[iSrc] != '\t' || bEscapeTab)) {
+		if((pszMsg[iSrc] < 32) && (pszMsg[iSrc] != '\t' || glbl.GetParserEscapeControlCharacterTab())) {
 			/* note: \0 must always be escaped, the rest of the code currently
 			 * can not handle it! -- rgerhards, 2009-08-26
 			 */
-			if(pszMsg[iSrc] == '\0' || bEscapeCCOnRcv) {
+			if(pszMsg[iSrc] == '\0' || glbl.GetParserEscapeControlCharactersOnReceive()) {
 				/* we are configured to escape control characters. Please note
 				 * that this most probably break non-western character sets like
 				 * Japanese, Korean or Chinese. rgerhards, 2007-07-17
 				 */
-				pDst[iDst++] = cCCEscapeChar;
+				if (glbl.GetParserEscapeControlCharactersCStyle()) {
+					pDst[iDst++] = '\\';
+
+					switch (pszMsg[iSrc]) {
+					case '\0':
+						pDst[iDst++] = '0';
+						break;
+					case '\a':
+						pDst[iDst++] = 'a';
+						break;
+					case '\b':
+						pDst[iDst++] = 'b';
+						break;
+					case '\e':
+						pDst[iDst++] = 'e';
+						break;
+					case '\f':
+						pDst[iDst++] = 'f';
+						break;
+					case '\n':
+						pDst[iDst++] = 'n';
+						break;
+					case '\r':
+						pDst[iDst++] = 'r';
+						break;
+					case '\t':
+						pDst[iDst++] = 't';
+						break;
+					case '\v':
+						pDst[iDst++] = 'v';
+						break;
+					default:
+						pDst[iDst++] = 'x';
+
+						pc = pszMsg[iSrc];
+						pDst[iDst++] = hexdigit[(pc & 0xF0) >> 4];
+						pDst[iDst++] = hexdigit[pc & 0xF];
+
+						break;
+					}
+
+				} else {
+					pDst[iDst++] = glbl.GetParserControlCharacterEscapePrefix();
+					pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0300) >> 6);
+					pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0070) >> 3);
+					pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0007));
+				}
+			}
+
+		} else if(pszMsg[iSrc] > 127 && glbl.GetParserEscape8BitCharactersOnReceive()) {
+			if (glbl.GetParserEscapeControlCharactersCStyle()) {
+				pDst[iDst++] = '\\';
+				pDst[iDst++] = 'x';
+
+				pc = pszMsg[iSrc];
+				pDst[iDst++] = hexdigit[(pc & 0xF0) >> 4];
+				pDst[iDst++] = hexdigit[pc & 0xF];
+
+			} else {
+				/* In this case, we also do the conversion. Note that this most
+				 * probably breaks European languages. -- rgerhards, 2010-01-27
+				 */
+				pDst[iDst++] = glbl.GetParserControlCharacterEscapePrefix();
 				pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0300) >> 6);
 				pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0070) >> 3);
 				pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0007));
 			}
-		} else if(pszMsg[iSrc] > 127 && bEscape8BitChars) {
-			/* In this case, we also do the conversion. Note that this most
-			 * probably breaks European languages. -- rgerhards, 2010-01-27
-			 */
-			pDst[iDst++] = cCCEscapeChar;
-			pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0300) >> 6);
-			pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0070) >> 3);
-			pDst[iDst++] = '0' + ((pszMsg[iSrc] & 0007));
 		} else {
 			pDst[iDst++] = pszMsg[iSrc];
 		}
@@ -496,27 +666,30 @@ ParseMsg(msg_t *pMsg)
 	 * will cause it to happen. After that, access to the unsanitized message is no
 	 * loger possible.
 	 */
-	pParserList = ruleset.GetParserList(pMsg);
+	pParserList = ruleset.GetParserList(ourConf, pMsg);
 	if(pParserList == NULL) {
 		pParserList = pDfltParsLst;
 	}
 	DBGPRINTF("parse using parser list %p%s.\n", pParserList,
 		  (pParserList == pDfltParsLst) ? " (the default list)" : "");
 
-	bIsSanitized = FALSE;
-	bPRIisParsed = FALSE;
+	bIsSanitized = RSFALSE;
+	bPRIisParsed = RSFALSE;
 	while(pParserList != NULL) {
 		pParser = pParserList->pParser;
-		if(pParser->bDoSanitazion && bIsSanitized == FALSE) {
+		if(pParser->bDoSanitazion && bIsSanitized == RSFALSE) {
 			CHKiRet(SanitizeMsg(pMsg));
-			if(pParser->bDoPRIParsing && bPRIisParsed == FALSE) {
+			if(pParser->bDoPRIParsing && bPRIisParsed == RSFALSE) {
 				CHKiRet(ParsePRI(pMsg));
-				bPRIisParsed = TRUE;
+				bPRIisParsed = RSTRUE;
 			}
-			bIsSanitized = TRUE;
+			bIsSanitized = RSTRUE;
 		}
-		localRet = pParser->pModule->mod.pm.parse(pMsg);
-		dbgprintf("Parser '%s' returned %d\n", pParser->pName, localRet);
+		if(pParser->pModule->mod.pm.parse2 == NULL)
+			localRet = pParser->pModule->mod.pm.parse(pMsg);
+		else
+			localRet = pParser->pModule->mod.pm.parse2(pParser->pInst, pMsg);
+		DBGPRINTF("Parser '%s' returned %d\n", pParser->pName, localRet);
 		if(localRet != RS_RET_COULD_NOT_PARSE)
 			break;
 		pParserList = pParserList->pNext;
@@ -543,68 +716,6 @@ ParseMsg(msg_t *pMsg)
 finalize_it:
 	RETiRet;
 }
-
-/* set the parser name - string is copied over, call can continue to use it,
- * but must free it if desired.
- */
-static rsRetVal
-SetName(parser_t *pThis, uchar *name)
-{
-	DEFiRet;
-
-	ISOBJ_TYPE_assert(pThis, parser);
-	assert(name != NULL);
-
-	if(pThis->pName != NULL) {
-		free(pThis->pName);
-		pThis->pName = NULL;
-	}
-
-	CHKmalloc(pThis->pName = ustrdup(name));
-
-finalize_it:
-	RETiRet;
-}
-
-
-/* set a pointer to "our" module. Note that no module
- * pointer must already be set.
- */
-static rsRetVal
-SetModPtr(parser_t *pThis, modInfo_t *pMod)
-{
-	ISOBJ_TYPE_assert(pThis, parser);
-	assert(pMod != NULL);
-	assert(pThis->pModule == NULL);
-	pThis->pModule = pMod;
-	return RS_RET_OK;
-}
-
-
-/* Specify if we should do standard message sanitazion before we pass the data
- * down to the parser.
- */
-static rsRetVal
-SetDoSanitazion(parser_t *pThis, int bDoIt)
-{
-	ISOBJ_TYPE_assert(pThis, parser);
-	pThis->bDoSanitazion = bDoIt;
-	return RS_RET_OK;
-}
-
-
-/* Specify if we should do standard PRI parsing before we pass the data
- * down to the parser module.
- */
-static rsRetVal
-SetDoPRIParsing(parser_t *pThis, int bDoIt)
-{
-	ISOBJ_TYPE_assert(pThis, parser);
-	pThis->bDoPRIParsing = bDoIt;
-	return RS_RET_OK;
-}
-
-
 /* queryInterface function-- rgerhards, 2009-11-03
  */
 BEGINobjQueryInterface(parser)
@@ -634,23 +745,6 @@ CODESTARTobjQueryInterface(parser)
 	pIf->FindParser = FindParser;
 finalize_it:
 ENDobjQueryInterface(parser)
-
-
-
-/* Reset config variables to default values.
- * rgerhards, 2007-07-17
- */
-static rsRetVal
-resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
-{
-	cCCEscapeChar = '#';
-	bEscapeCCOnRcv = 1; /* default is to escape control characters */
-	bEscape8BitChars = 0; /* default is to escape control characters */
-	bEscapeTab = 1; /* default is to escape control characters */
-	bDropTrailingLF = 1; /* default is to drop trailing LF's on reception */
-
-	return RS_RET_OK;
-}
 
 /* This destroys the master parserlist and all of its parser entries. MUST only be
  * done when the module is shut down. Parser modules are NOT unloaded, rsyslog
@@ -695,14 +789,6 @@ BEGINObjClassInit(parser, 1, OBJ_IS_CORE_MODULE) /* class, version */
 	CHKiRet(objUse(datetime, CORE_COMPONENT));
 	CHKiRet(objUse(ruleset, CORE_COMPONENT));
 
-	CHKiRet(regCfSysLineHdlr((uchar *)"controlcharacterescapeprefix", 0, eCmdHdlrGetChar, NULL, &cCCEscapeChar, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"droptrailinglfonreception", 0, eCmdHdlrBinary, NULL, &bDropTrailingLF, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"escapecontrolcharactersonreceive", 0, eCmdHdlrBinary, NULL, &bEscapeCCOnRcv, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"escape8bitcharactersonreceive", 0, eCmdHdlrBinary, NULL, &bEscape8BitChars, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"escapecontrolcharactertab", 0, eCmdHdlrBinary, NULL, &bEscapeTab, NULL));
-	CHKiRet(regCfSysLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, NULL));
-
 	InitParserList(&pParsLstRoot);
 	InitParserList(&pDfltParsLst);
 ENDObjClassInit(parser)
-

@@ -63,6 +63,7 @@
 
 MODULE_TYPE_INPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("imgssapi")
 
 /* defines */
 #define ALLOWEDMETHOD_GSS 2
@@ -71,6 +72,7 @@ MODULE_TYPE_NOKEEP
 
 /* some forward definitions - they may go away when we no longer include imtcp.c */
 static rsRetVal addGSSListener(void __attribute__((unused)) *pVal, uchar *pNewVal);
+static rsRetVal actGSSListener(uchar *port);
 static int TCPSessGSSInit(void);
 static void TCPSessGSSClose(tcps_sess_t* pSess);
 static rsRetVal TCPSessGSSRecv(tcps_sess_t *pSess, void *buf, size_t buf_len, ssize_t *);
@@ -89,6 +91,7 @@ DEFobjCurrIf(glbl)
 
 static tcpsrv_t *pOurTcpsrv = NULL;  /* our TCP server(listener) TODO: change for multiple instances */
 static gss_cred_id_t gss_server_creds = GSS_C_NO_CREDENTIAL;
+static uchar *srvPort;
 
 /* our usr structure for the tcpsrv object */
 typedef struct gsssrv_s {
@@ -104,6 +107,10 @@ typedef struct gss_sess_s {
 
 
 /* config variables */
+struct modConfData_s {
+	EMPTY_STRUCT;
+};
+
 static int iTCPSessMax = 200; /* max number of sessions */
 static char *gss_listen_service_name = NULL;
 static int bPermitPlainTcp = 0; /* plain tcp syslog allowed on GSSAPI port? */
@@ -312,6 +319,16 @@ static rsRetVal
 addGSSListener(void __attribute__((unused)) *pVal, uchar *pNewVal)
 {
 	DEFiRet;
+
+	srvPort = pNewVal;
+
+	RETiRet;
+}
+
+static rsRetVal
+actGSSListener(uchar *port)
+{
+	DEFiRet;
 	gsssrv_t *pGSrv;
 
 	if(pOurTcpsrv == NULL) {
@@ -335,7 +352,7 @@ addGSSListener(void __attribute__((unused)) *pVal, uchar *pNewVal)
 		CHKiRet(tcpsrv.SetCBOnRegularClose(pOurTcpsrv, onRegularClose));
 		CHKiRet(tcpsrv.SetCBOnErrClose(pOurTcpsrv, onErrClose));
 		CHKiRet(tcpsrv.SetInputName(pOurTcpsrv, UCHAR_CONSTANT("imgssapi")));
-		tcpsrv.configureTCPListen(pOurTcpsrv, pNewVal);
+		tcpsrv.configureTCPListen(pOurTcpsrv, port, 1);
 		CHKiRet(tcpsrv.ConstructFinalize(pOurTcpsrv));
 	}
 
@@ -640,10 +657,42 @@ TCPSessGSSDeinit(void)
 	RETiRet;
 }
 
+
+#if 0 /* can be used to integrate into new config system */
+BEGINbeginCnfLoad
+CODESTARTbeginCnfLoad
+ENDbeginCnfLoad
+
+
+BEGINendCnfLoad
+CODESTARTendCnfLoad
+ENDendCnfLoad
+
+
+BEGINcheckCnf
+CODESTARTcheckCnf
+ENDcheckCnf
+
+
+BEGINactivateCnf
+CODESTARTactivateCnf
+ENDactivateCnf
+
+
+BEGINfreeCnf
+CODESTARTfreeCnf
+ENDfreeCnf
+#endif
+
 /* This function is called to gather input.
  */
 BEGINrunInput
 CODESTARTrunInput
+	/* This will fail if the priviledges are dropped. Should be
+	 * moved to the '*activateCnfPrePrivDrop' section eventually.
+	 */
+	actGSSListener(srvPort);
+
 	iRet = tcpsrv.Run(pOurTcpsrv);
 ENDrunInput
 
@@ -651,7 +700,7 @@ ENDrunInput
 /* initialize and return if will run or not */
 BEGINwillRun
 CODESTARTwillRun
-	if(pOurTcpsrv == NULL)
+	if(srvPort == NULL)
 		ABORT_FINALIZE(RS_RET_NO_RUN);
 
 	net.PrintAllowedSenders(2); /* TCP */

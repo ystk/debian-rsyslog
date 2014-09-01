@@ -33,6 +33,7 @@
 #define _STRINGBUF_H_INCLUDED__ 1
 
 #include <assert.h>
+#include <libestr.h>
 
 /** 
  * The dynamic string buffer object.
@@ -54,8 +55,10 @@ typedef struct cstr_s
  */
 rsRetVal cstrConstruct(cstr_t **ppThis);
 #define rsCStrConstruct(x) cstrConstruct((x))
+rsRetVal cstrConstructFromESStr(cstr_t **ppThis, es_str_t *str);
 rsRetVal rsCStrConstructFromszStr(cstr_t **ppThis, uchar *sz);
 rsRetVal rsCStrConstructFromCStr(cstr_t **ppThis, cstr_t *pFrom);
+rsRetVal rsCStrConstructFromszStrf(cstr_t **ppThis, char *fmt, ...) __attribute__((format(printf,2, 3)));
 
 /**
  * Destruct the string buffer object.
@@ -152,7 +155,6 @@ static inline uchar*  cstrGetSzStrNoNULL(cstr_t *pThis)
  */
 rsRetVal rsCStrTruncate(cstr_t *pThis, size_t nTrunc);
 
-rsRetVal rsCStrTrimTrailingWhiteSpace(cstr_t *pThis);
 rsRetVal cstrTrimTrailingWhiteSpace(cstr_t *pThis);
 
 /**
@@ -171,6 +173,12 @@ rsRetVal rsCStrAppendStr(cstr_t *pThis, uchar* psz);
  */
 rsRetVal rsCStrAppendStrWithLen(cstr_t *pThis, uchar* psz, size_t iStrLen);
 
+/**
+ * Append a printf-style formated string to the buffer.
+ *
+ * \param fmt pointer to the format string (see man 3 printf for details). Must not be NULL.
+ */
+rsRetVal rsCStrAppendStrf(cstr_t *pThis, char *fmt, ...) __attribute__((format(printf,2, 3)));
 
 /**
  * Append an integer to the string. No special formatting is
@@ -202,7 +210,7 @@ rsRetVal rsCStrConvertToBool(cstr_t *pStr, number_t *pBool);
 
 /* new calling interface */
 rsRetVal cstrFinalize(cstr_t *pThis);
-rsRetVal cstrConvSzStrAndDestruct(cstr_t *pThis, uchar **ppSz, int bRetNULL);
+rsRetVal cstrConvSzStrAndDestruct(cstr_t **pThis, uchar **ppSz, int bRetNULL);
 rsRetVal cstrAppendCStr(cstr_t *pThis, cstr_t *pstrAppend);
 
 /* now come inline-like functions */

@@ -1,6 +1,13 @@
 /* omshell.c
  * This is the implementation of the build-in shell output module.
  *
+ * ************* DO NOT EXTEND THIS MODULE **************
+ * This is pure legacy, omprog has much better and more
+ * secure functionality than this module. It is NOT
+ * recommended to base new work on it!
+ * 2012-01-19 rgerhards
+ * ******************************************************
+ *
  * NOTE: read comments in module-template.h to understand how this file
  *       works!
  *
@@ -12,7 +19,7 @@
  * of the "old" message code without any modifications. However, it
  * helps to have things at the right place one we go to the meat of it.
  *
- * Copyright 2007-2012 Adiscon GmbH.
+ * Copyright 2007-2013 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -56,10 +63,18 @@ typedef struct _instanceData {
 	uchar	progName[MAXFNAME]; /* program  to execute */
 } instanceData;
 
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
 
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
+
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINisCompatibleWithFeature
@@ -74,6 +89,11 @@ CODESTARTfreeInstance
 ENDfreeInstance
 
 
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
+
+
 BEGINdbgPrintInstInfo
 CODESTARTdbgPrintInstInfo
 	printf("%s", pData->progName);
@@ -86,13 +106,9 @@ ENDtryResume
 
 BEGINdoAction
 CODESTARTdoAction
-	/* TODO: using pData->progName is not clean from the point of
-	 * modularization. We'll change that as we go ahead with modularization.
-	 * rgerhards, 2007-07-20
-	 */
 	dbgprintf("\n");
-	if(execProg((uchar*) pData->progName, 1, ppString[0]) == 0)
-	 	errmsg.LogError(0, NO_ERRCODE, "Executing program '%s' failed", (char*)pData->progName);
+	if(execProg((uchar*) pWrkrData->pData->progName, 1, ppString[0]) == 0)
+	 	errmsg.LogError(0, NO_ERRCODE, "Executing program '%s' failed", (char*)pWrkrData->pData->progName);
 ENDdoAction
 
 
@@ -133,6 +149,7 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
 ENDqueryEtryPt
 
 

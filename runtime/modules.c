@@ -11,7 +11,7 @@
  *
  * File begun on 2007-07-22 by RGerhards
  *
- * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2012 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -55,6 +55,7 @@
 #endif
 
 #include "cfsysline.h"
+#include "rsconf.h"
 #include "modules.h"
 #include "errmsg.h"
 #include "parser.h"
@@ -63,16 +64,7 @@
 /* static data */
 DEFobjStaticHelpers
 DEFobjCurrIf(errmsg)
-DEFobjCurrIf(parser)
 DEFobjCurrIf(strgen)
-
-/* we must ensure that only one thread at one time tries to load or unload
- * modules, otherwise we may see race conditions. This first came up with
- * imdiag/imtcp, which both use the same stream drivers. Below is the mutex
- * for that handling.
- * rgerhards, 2009-05-25
- */
-static pthread_mutex_t mutLoadUnload;
 
 static modInfo_t *pLoadedModules = NULL;	/* list of currently-loaded modules */
 static modInfo_t *pLoadedModulesLast = NULL;	/* tail-pointer */
@@ -80,8 +72,18 @@ static modInfo_t *pLoadedModulesLast = NULL;	/* tail-pointer */
 /* already dlopen()-ed libs */
 static struct dlhandle_s *pHandles = NULL;
 
-/* config settings */
-uchar	*pModDir = NULL; /* read-only after startup */
+static uchar *pModDir;		/* directory where loadable modules are found */
+
+/* tables for interfacing with the v6 config system */
+/* action (instance) parameters */
+static struct cnfparamdescr actpdescr[] = {
+	{ "load", eCmdHdlrGetWord, 1 }
+};
+static struct cnfparamblk pblk =
+	{ CNFPARAMBLK_VERSION,
+	  sizeof(actpdescr)/sizeof(struct cnfparamdescr),
+	  actpdescr
+	};
 
 
 /* we provide a set of dummy functions for modules that do not support the
@@ -91,17 +93,29 @@ uchar	*pModDir = NULL; /* read-only after startup */
  * harm. This simplifies things as in action processing we do not need to check
  * if the transactional entry points exist.
  */
-static rsRetVal dummyBeginTransaction() 
+static rsRetVal
+dummyBeginTransaction() 
 {
 	return RS_RET_OK;
 }
-static rsRetVal dummyEndTransaction() 
+static rsRetVal
+dummyEndTransaction() 
 {
 	return RS_RET_OK;
 }
-static rsRetVal dummyIsCompatibleWithFeature() 
+static rsRetVal
+dummyIsCompatibleWithFeature() 
 {
 	return RS_RET_INCOMPATIBLE;
+}
+static rsRetVal
+dummynewActInst(uchar *modName, struct nvlst __attribute__((unused)) *dummy1,
+	  	void __attribute__((unused)) **dummy2, omodStringRequest_t __attribute__((unused)) **dummy3) 
+{
+	errmsg.LogError(0, RS_RET_CONFOBJ_UNSUPPORTED, "config objects are not "
+			"supported by module '%s' -- legacy config options "
+			"MUST be used instead", modName);
+	return RS_RET_CONFOBJ_UNSUPPORTED;
 }
 
 #ifdef DEBUG
@@ -229,8 +243,8 @@ static rsRetVal moduleConstruct(modInfo_t **pThis)
 static void moduleDestruct(modInfo_t *pThis)
 {
 	assert(pThis != NULL);
-	if(pThis->pszName != NULL)
-		free(pThis->pszName);
+	free(pThis->pszName);
+	free(pThis->cnfName);
 	if(pThis->pModHdlr != NULL) {
 #	ifdef	VALGRIND
 #		warning "dlclose disabled for valgrind"
@@ -298,7 +312,8 @@ finalize_it:
 
 /* get the name of a module
  */
-static uchar *modGetName(modInfo_t *pThis)
+uchar *
+modGetName(modInfo_t *pThis)
 {
 	return((pThis->pszName == NULL) ? (uchar*) "" : pThis->pszName);
 }
@@ -319,7 +334,7 @@ static uchar *modGetStateName(modInfo_t *pThis)
 /* Add a module to the loaded module linked list
  */
 static inline void
-addModToList(modInfo_t *pThis)
+addModToGlblList(modInfo_t *pThis)
 {
 	assert(pThis != NULL);
 
@@ -331,6 +346,102 @@ addModToList(modInfo_t *pThis)
 		pLoadedModulesLast->pNext = pThis;
 		pLoadedModulesLast = pThis;
 	}
+}
+
+
+/* ready module for config processing. this includes checking if the module
+ * is already in the config, so this function may return errors. Returns a
+ * pointer to the last module inthe current config. That pointer needs to
+ * be passed to addModToCnfLst() when it is called later in the process.
+ */
+rsRetVal
+readyModForCnf(modInfo_t *pThis, cfgmodules_etry_t **ppNew, cfgmodules_etry_t **ppLast)
+{
+	cfgmodules_etry_t *pNew = NULL;
+	cfgmodules_etry_t *pLast;
+	DEFiRet;
+	assert(pThis != NULL);
+
+	if(loadConf == NULL) {
+		FINALIZE; /* we are in an early init state */
+	}
+
+	/* check for duplicates and, as a side-activity, identify last node */
+	pLast = loadConf->modules.root; 
+	if(pLast != NULL) {
+		while(1) { /* loop broken inside */
+			if(pLast->pMod == pThis) {
+				DBGPRINTF("module '%s' already in this config\n", modGetName(pThis));
+				if(strncmp((char*)modGetName(pThis), "builtin:", sizeof("builtin:")-1)) {
+					errmsg.LogError(0, RS_RET_MODULE_ALREADY_IN_CONF,
+					   "module '%s' already in this config, cannot be added\n", modGetName(pThis));
+					ABORT_FINALIZE(RS_RET_MODULE_ALREADY_IN_CONF);
+				}
+				FINALIZE;
+			}
+			if(pLast->next == NULL)
+				break;
+			pLast = pLast->next;
+		}
+	}
+
+	/* if we reach this point, pLast is the tail pointer and this module is new
+	 * inside the currently loaded config. So, iff it is an input module, let's
+	 * pass it a pointer which it can populate with a pointer to its module conf.
+	 */
+
+	CHKmalloc(pNew = MALLOC(sizeof(cfgmodules_etry_t)));
+	pNew->canActivate = 1;
+	pNew->next = NULL;
+	pNew->pMod = pThis;
+
+	if(pThis->beginCnfLoad != NULL) {
+		CHKiRet(pThis->beginCnfLoad(&pNew->modCnf, loadConf));
+	}
+
+	*ppLast = pLast;
+	*ppNew = pNew;
+finalize_it:
+	if(iRet != RS_RET_OK) {
+		if(pNew != NULL)
+			free(pNew);
+	}
+	RETiRet;
+}
+
+
+/* abort the creation of a module entry without adding it to the
+ * module list. Needed to prevent mem leaks.
+ */
+static inline void
+abortCnfUse(cfgmodules_etry_t *pNew)
+{
+	free(pNew);
+}
+
+
+/* Add a module to the config module list for current loadConf.
+ * Requires last pointer obtained by readyModForCnf().
+ */
+rsRetVal
+addModToCnfList(cfgmodules_etry_t *pNew, cfgmodules_etry_t *pLast)
+{
+	DEFiRet;
+	assert(pNew != NULL);
+
+	if(loadConf == NULL) {
+		FINALIZE; /* we are in an early init state */
+	}
+
+	if(pLast == NULL) {
+		loadConf->modules.root = pNew;
+	} else {
+		/* there already exist entries */
+		pLast->next = pNew;
+	}
+
+finalize_it:
+	RETiRet;
 }
 
 
@@ -355,19 +466,51 @@ static modInfo_t *GetNxt(modInfo_t *pThis)
 
 
 /* this function is like GetNxt(), but it returns pointers to
- * modules of specific type only. As we currently deal just with output modules,
- * it is a dummy, to be filled with real code later.
- * rgerhards, 2007-07-24
+ * the configmodules entry, which than can be used to obtain the
+ * actual module pointer. Note that it returns those for
+ * modules of specific type only. Only modules from the provided
+ * config are returned. Note that processing speed could be improved,
+ * but this is really not relevant, as config file loading is not really
+ * something we are concerned about in regard to runtime.
  */
-static modInfo_t *GetNxtType(modInfo_t *pThis, eModType_t rqtdType)
+static cfgmodules_etry_t
+*GetNxtCnfType(rsconf_t *cnf, cfgmodules_etry_t *node, eModType_t rqtdType)
 {
-	modInfo_t *pMod = pThis;
+	if(node == NULL) { /* start at beginning of module list */
+		node = cnf->modules.root;
+	} else {
+		node = node->next;
+	}
 
-	do {
-		pMod = GetNxt(pMod);
-	} while(!(pMod == NULL || pMod->eType == rqtdType)); /* warning: do ... while() */
+	if(rqtdType != eMOD_ANY) { /* if any, we already have the right one! */
+		while(node != NULL && node->pMod->eType != rqtdType) {
+			node = node->next;
+		}
+	}
 
-	return pMod;
+	return node;
+}
+
+
+/* Find a module with the given conf name and type. Returns NULL if none
+ * can be found, otherwise module found.
+ */
+static modInfo_t *
+FindWithCnfName(rsconf_t *cnf, uchar *name, eModType_t rqtdType)
+{
+	cfgmodules_etry_t *node;
+
+	;
+	for(  node = cnf->modules.root
+	    ; node != NULL
+	    ; node = node->next) {
+		if(node->pMod->eType != rqtdType || node->pMod->cnfName == NULL)
+			continue;
+		if(!strcasecmp((char*)node->pMod->cnfName, (char*)name))
+			break;
+	}
+
+	return node == NULL ? NULL : node->pMod;
 }
 
 
@@ -409,17 +552,19 @@ finalize_it:
  * everything needed to fully initialize the module.
  */
 static rsRetVal
-doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_t*), uchar *name, void *pModHdlr)
+doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_t*),
+	  uchar *name, void *pModHdlr, modInfo_t **pNewModule)
 {
 	rsRetVal localRet;
 	modInfo_t *pNew = NULL;
 	uchar *pName;
-	parser_t *pParser; /* used for parser modules */
 	strgen_t *pStrgen; /* used for strgen modules */
 	rsRetVal (*GetName)(uchar**);
 	rsRetVal (*modGetType)(eModType_t *pType);
 	rsRetVal (*modGetKeepType)(eModKeepType_t *pKeepType);
 	struct dlhandle_s *pHandle = NULL;
+	rsRetVal (*getModCnfName)(uchar **cnfName);
+	uchar *cnfName;
 	DEFiRet;
 
 	assert(modInit != NULL);
@@ -442,7 +587,7 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 	CHKiRet((*modGetType)(&pNew->eType));
 	CHKiRet((*pNew->modQueryEtryPt)((uchar*)"getKeepType", &modGetKeepType));
 	CHKiRet((*modGetKeepType)(&pNew->eKeepType));
-	dbgprintf("module of type %d being loaded.\n", pNew->eType);
+	dbgprintf("module %s of type %d being loaded (keepType=%d).\n", name, pNew->eType, pNew->eKeepType);
 	
 	/* OK, we know we can successfully work with the module. So we now fill the
 	 * rest of the data elements. First we load the interfaces common to all
@@ -455,7 +600,40 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 		pNew->isCompatibleWithFeature = dummyIsCompatibleWithFeature;
 	else if(localRet != RS_RET_OK)
 		ABORT_FINALIZE(localRet);
+	localRet = (*pNew->modQueryEtryPt)((uchar*)"setModCnf", &pNew->setModCnf);
+	if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
+		pNew->setModCnf = NULL;
+	else if(localRet != RS_RET_OK)
+		ABORT_FINALIZE(localRet);
 
+	/* optional calls for new config system */
+	localRet = (*pNew->modQueryEtryPt)((uchar*)"getModCnfName", &getModCnfName);
+	if(localRet == RS_RET_OK) {
+		if(getModCnfName(&cnfName) == RS_RET_OK)
+			pNew->cnfName = (uchar*) strdup((char*)cnfName);
+			  /**< we do not care if strdup() fails, we can accept that */
+		else
+			pNew->cnfName = NULL;
+		dbgprintf("module config name is '%s'\n", cnfName);
+	}
+	localRet = (*pNew->modQueryEtryPt)((uchar*)"beginCnfLoad", &pNew->beginCnfLoad);
+	if(localRet == RS_RET_OK) {
+		dbgprintf("module %s supports rsyslog v6 config interface\n", name);
+		CHKiRet((*pNew->modQueryEtryPt)((uchar*)"endCnfLoad", &pNew->endCnfLoad));
+		CHKiRet((*pNew->modQueryEtryPt)((uchar*)"freeCnf", &pNew->freeCnf));
+		CHKiRet((*pNew->modQueryEtryPt)((uchar*)"checkCnf", &pNew->checkCnf));
+		CHKiRet((*pNew->modQueryEtryPt)((uchar*)"activateCnf", &pNew->activateCnf));
+		localRet = (*pNew->modQueryEtryPt)((uchar*)"activateCnfPrePrivDrop", &pNew->activateCnfPrePrivDrop);
+		if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+			pNew->activateCnfPrePrivDrop = NULL;
+		} else {
+			CHKiRet(localRet);
+		}
+	} else if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+		pNew->beginCnfLoad = NULL; /* flag as non-present */
+	} else {
+		ABORT_FINALIZE(localRet);
+	}
 	/* ... and now the module-specific interfaces */
 	switch(pNew->eType) {
 		case eMOD_IN:
@@ -463,27 +641,92 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"willRun", &pNew->mod.im.willRun));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"afterRun", &pNew->mod.im.afterRun));
 			pNew->mod.im.bCanRun = 0;
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"newInpInst", &pNew->mod.im.newInpInst);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.im.newInpInst = NULL;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
 			break;
 		case eMOD_OUT:
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"freeInstance", &pNew->freeInstance));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"dbgPrintInstInfo", &pNew->dbgPrintInstInfo));
-			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"doAction", &pNew->mod.om.doAction));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"parseSelectorAct", &pNew->mod.om.parseSelectorAct));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"tryResume", &pNew->tryResume));
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"createWrkrInstance", &pNew->mod.om.createWrkrInstance));
+			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"freeWrkrInstance", &pNew->mod.om.freeWrkrInstance));
+
 			/* try load optional interfaces */
 			localRet = (*pNew->modQueryEtryPt)((uchar*)"doHUP", &pNew->doHUP);
 			if(localRet != RS_RET_OK && localRet != RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
 				ABORT_FINALIZE(localRet);
 
-			localRet = (*pNew->modQueryEtryPt)((uchar*)"beginTransaction", &pNew->mod.om.beginTransaction);
-			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
-				pNew->mod.om.beginTransaction = dummyBeginTransaction;
-			else if(localRet != RS_RET_OK)
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"SetShutdownImmdtPtr", &pNew->mod.om.SetShutdownImmdtPtr);
+			if(localRet != RS_RET_OK && localRet != RS_RET_MODULE_ENTRY_POINT_NOT_FOUND)
 				ABORT_FINALIZE(localRet);
 
-			localRet = (*pNew->modQueryEtryPt)((uchar*)"endTransaction", &pNew->mod.om.endTransaction);
+			pNew->mod.om.supportsTX = 1;
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"beginTransaction", &pNew->mod.om.beginTransaction);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.om.beginTransaction = dummyBeginTransaction;
+				pNew->mod.om.supportsTX = 0;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"doAction",
+				   &pNew->mod.om.doAction);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.om.doAction = NULL;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"commitTransaction",
+				   &pNew->mod.om.commitTransaction);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.om.commitTransaction = NULL;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
+
+			if(pNew->mod.om.doAction == NULL && pNew->mod.om.commitTransaction == NULL) {
+				errmsg.LogError(0, RS_RET_INVLD_OMOD,
+					"module %s does neither provide doAction() "
+					"nor commitTransaction() interface - cannot "
+					"load", name);
+				ABORT_FINALIZE(RS_RET_INVLD_OMOD);
+			}
+
+			if(pNew->mod.om.commitTransaction != NULL) {
+				if(pNew->mod.om.doAction != NULL){
+					errmsg.LogError(0, RS_RET_INVLD_OMOD,
+						"module %s provides both doAction() "
+						"and commitTransaction() interface, using "
+						"commitTransaction()", name);
+					pNew->mod.om.doAction = NULL;
+				}
+				if(pNew->mod.om.beginTransaction == NULL){
+					errmsg.LogError(0, RS_RET_INVLD_OMOD,
+						"module %s provides both commitTransaction() "
+						"but does not provide beginTransaction() - "
+						"cannot load", name);
+					ABORT_FINALIZE(RS_RET_INVLD_OMOD);
+				}
+			}
+
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"endTransaction",
+				   &pNew->mod.om.endTransaction);
 			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
 				pNew->mod.om.endTransaction = dummyEndTransaction;
+			} else if(localRet != RS_RET_OK) {
+				ABORT_FINALIZE(localRet);
+			}
+
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"newActInst", &pNew->mod.om.newActInst);
+			if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.om.newActInst = dummynewActInst;
 			} else if(localRet != RS_RET_OK) {
 				ABORT_FINALIZE(localRet);
 			}
@@ -491,31 +734,25 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 		case eMOD_LIB:
 			break;
 		case eMOD_PARSER:
-			/* first, we need to obtain the parser object. We could not do that during
-			 * init as that would have caused class bootstrap issues which are not
-			 * absolutely necessary. Note that we can call objUse() multiple times, it
-			 * handles that.
-			 */
-			CHKiRet(objUse(parser, CORE_COMPONENT));
-			/* here, we create a new parser object */
-			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"parse", &pNew->mod.pm.parse));
+			localRet = (*pNew->modQueryEtryPt)((uchar*)"parse2",
+				   &pNew->mod.pm.parse2);
+			if(localRet == RS_RET_OK) {
+				pNew->mod.pm.parse = NULL;
+				CHKiRet((*pNew->modQueryEtryPt)((uchar*)"newParserInst",
+					&pNew->mod.pm.newParserInst));
+				CHKiRet((*pNew->modQueryEtryPt)((uchar*)"freeParserInst",
+					&pNew->mod.pm.freeParserInst));
+			} else if(localRet == RS_RET_MODULE_ENTRY_POINT_NOT_FOUND) {
+				pNew->mod.pm.parse2 = NULL;
+				pNew->mod.pm.newParserInst = NULL;
+				pNew->mod.pm.freeParserInst = NULL;
+				CHKiRet((*pNew->modQueryEtryPt)((uchar*)"parse", &pNew->mod.pm.parse));
+			} else {
+				ABORT_FINALIZE(localRet);
+			}
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"GetParserName", &GetName));
 			CHKiRet(GetName(&pName));
-			CHKiRet(parser.Construct(&pParser));
-
-			/* check some features */
-			localRet = pNew->isCompatibleWithFeature(sFEATUREAutomaticSanitazion);
-			if(localRet == RS_RET_OK){
-				CHKiRet(parser.SetDoSanitazion(pParser, TRUE));
-			}
-			localRet = pNew->isCompatibleWithFeature(sFEATUREAutomaticPRIParsing);
-			if(localRet == RS_RET_OK){
-				CHKiRet(parser.SetDoPRIParsing(pParser, TRUE));
-			}
-
-			CHKiRet(parser.SetName(pParser, pName));
-			CHKiRet(parser.SetModPtr(pParser, pNew));
-			CHKiRet(parser.ConstructFinalize(pParser));
+			CHKiRet(parserConstructViaModAndName(pNew, pName, NULL));
 			break;
 		case eMOD_STRGEN:
 			/* first, we need to obtain the strgen object. We could not do that during
@@ -524,7 +761,6 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 			 * handles that.
 			 */
 			CHKiRet(objUse(strgen, CORE_COMPONENT));
-			/* here, we create a new parser object */
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"strgen", &pNew->mod.sm.strgen));
 			CHKiRet((*pNew->modQueryEtryPt)((uchar*)"GetName", &GetName));
 			CHKiRet(GetName(&pName));
@@ -533,11 +769,14 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 			CHKiRet(strgen.SetModPtr(pStrgen, pNew));
 			CHKiRet(strgen.ConstructFinalize(pStrgen));
 			break;
+		case eMOD_ANY: /* this is mostly to keep the compiler happy! */
+			DBGPRINTF("PROGRAM ERROR: eMOD_ANY set as module type\n");
+			assert(0);
+			break;
 	}
 
 	pNew->pszName = (uchar*) strdup((char*)name); /* we do not care if strdup() fails, we can accept that */
 	pNew->pModHdlr = pModHdlr;
-	/* TODO: take this from module */
 	if(pModHdlr == NULL) {
 		pNew->eLinkType = eMOD_LINK_STATIC;
 	} else {
@@ -569,12 +808,14 @@ doModInit(rsRetVal (*modInit)(int, int*, rsRetVal(**)(), rsRetVal(*)(), modInfo_
 	}
 
 	/* we initialized the structure, now let's add it to the linked list of modules */
-	addModToList(pNew);
+	addModToGlblList(pNew);
+	*pNewModule = pNew;
 
 finalize_it:
 	if(iRet != RS_RET_OK) {
 		if(pNew != NULL)
 			moduleDestruct(pNew);
+		*pNewModule = NULL;
 	}
 
 	RETiRet;
@@ -610,25 +851,35 @@ static void modPrintList(void)
 		case eMOD_STRGEN:
 			dbgprintf("strgen");
 			break;
+		case eMOD_ANY: /* this is mostly to keep the compiler happy! */
+			DBGPRINTF("PROGRAM ERROR: eMOD_ANY set as module type\n");
+			assert(0);
+			break;
 		}
 		dbgprintf(" module.\n");
 		dbgprintf("Entry points:\n");
 		dbgprintf("\tqueryEtryPt:        0x%lx\n", (unsigned long) pMod->modQueryEtryPt);
 		dbgprintf("\tdbgPrintInstInfo:   0x%lx\n", (unsigned long) pMod->dbgPrintInstInfo);
 		dbgprintf("\tfreeInstance:       0x%lx\n", (unsigned long) pMod->freeInstance);
+		dbgprintf("\tbeginCnfLoad:       0x%lx\n", (unsigned long) pMod->beginCnfLoad);
+		dbgprintf("\tSetModCnf:          0x%lx\n", (unsigned long) pMod->setModCnf);
+		dbgprintf("\tcheckCnf:           0x%lx\n", (unsigned long) pMod->checkCnf);
+		dbgprintf("\tactivateCnfPrePrivDrop: 0x%lx\n", (unsigned long) pMod->activateCnfPrePrivDrop);
+		dbgprintf("\tactivateCnf:        0x%lx\n", (unsigned long) pMod->activateCnf);
+		dbgprintf("\tfreeCnf:            0x%lx\n", (unsigned long) pMod->freeCnf);
 		switch(pMod->eType) {
 		case eMOD_OUT:
 			dbgprintf("Output Module Entry Points:\n");
-			dbgprintf("\tdoAction:           0x%lx\n", (unsigned long) pMod->mod.om.doAction);
-			dbgprintf("\tparseSelectorAct:   0x%lx\n", (unsigned long) pMod->mod.om.parseSelectorAct);
-			dbgprintf("\ttryResume:          0x%lx\n", (unsigned long) pMod->tryResume);
-			dbgprintf("\tdoHUP:              0x%lx\n", (unsigned long) pMod->doHUP);
-			dbgprintf("\tBeginTransaction:   0x%lx\n", (unsigned long)
-								   ((pMod->mod.om.beginTransaction == dummyBeginTransaction) ?
-								    0 :  pMod->mod.om.beginTransaction));
-			dbgprintf("\tEndTransaction:     0x%lx\n", (unsigned long)
-								   ((pMod->mod.om.endTransaction == dummyEndTransaction) ?
-								    0 :  pMod->mod.om.endTransaction));
+			dbgprintf("\tdoAction:           %p\n", pMod->mod.om.doAction);
+			dbgprintf("\tparseSelectorAct:   %p\n", pMod->mod.om.parseSelectorAct);
+			dbgprintf("\tnewActInst:         %p\n", (pMod->mod.om.newActInst == dummynewActInst) ?
+								    NULL :  pMod->mod.om.newActInst);
+			dbgprintf("\ttryResume:          %p\n", pMod->tryResume);
+			dbgprintf("\tdoHUP:              %p\n", pMod->doHUP);
+			dbgprintf("\tBeginTransaction:   %p\n", ((pMod->mod.om.beginTransaction == dummyBeginTransaction) ?
+								   NULL :  pMod->mod.om.beginTransaction));
+			dbgprintf("\tEndTransaction:     %p\n", ((pMod->mod.om.endTransaction == dummyEndTransaction) ?
+								   NULL :  pMod->mod.om.endTransaction));
 			break;
 		case eMOD_IN:
 			dbgprintf("Input Module Entry Points\n");
@@ -645,6 +896,8 @@ static void modPrintList(void)
 		case eMOD_STRGEN:
 			dbgprintf("Strgen Module Entry Points\n");
 			dbgprintf("\tstrgen:            0x%lx\n", (unsigned long) pMod->mod.sm.strgen);
+			break;
+		case eMOD_ANY: /* this is mostly to keep the compiler happy! */
 			break;
 		}
 		dbgprintf("\n");
@@ -667,7 +920,7 @@ modUnlinkAndDestroy(modInfo_t **ppThis)
 	pThis = *ppThis;
 	assert(pThis != NULL);
 
-	pthread_mutex_lock(&mutLoadUnload);
+	pthread_mutex_lock(&mutObjGlobalOp);
 
 	/* first check if we are permitted to unload */
 	if(pThis->eType == eMOD_LIB) {
@@ -703,7 +956,7 @@ modUnlinkAndDestroy(modInfo_t **ppThis)
 	moduleDestruct(pThis);
 
 finalize_it:
-	pthread_mutex_unlock(&mutLoadUnload);
+	pthread_mutex_unlock(&mutObjGlobalOp);
 	RETiRet;
 }
 
@@ -751,6 +1004,27 @@ modUnloadAndDestructAll(eModLinkType_t modLinkTypesToUnload)
 	RETiRet;
 }
 
+/* find module with given name in global list */
+static inline rsRetVal
+findModule(uchar *pModName, int iModNameLen, modInfo_t **pMod)
+{
+	modInfo_t *pModInfo;
+	uchar *pModNameCmp;
+	DEFiRet;
+
+	pModInfo = GetNxt(NULL);
+	while(pModInfo != NULL) {
+		if(!strncmp((char *) pModName, (char *) (pModNameCmp = modGetName(pModInfo)), iModNameLen) &&
+		   (!*(pModNameCmp + iModNameLen) || !strcmp((char *) pModNameCmp + iModNameLen, ".so"))) {
+			dbgprintf("Module '%s' found\n", pModName);
+			break;
+		}
+		pModInfo = GetNxt(pModInfo);
+	}
+	*pMod = pModInfo;
+	RETiRet;
+}
+
 
 /* load a module and initialize it, based on doModLoad() from conf.c
  * rgerhards, 2008-03-05
@@ -760,55 +1034,103 @@ modUnloadAndDestructAll(eModLinkType_t modLinkTypesToUnload)
  * configuration file processing, which is executed on a single thread. Should we
  * change that design at any stage (what is unlikely), we need to find a
  * replacement.
+ * rgerhards, 2011-04-27:
+ * Parameter "bConfLoad" tells us if the load was triggered by a config handler, in
+ * which case we need to tie the loaded module to the current config. If bConfLoad == 0,
+ * the system loads a module for internal reasons, this is not directly tied to a
+ * configuration. We could also think if it would be useful to add only certain types
+ * of modules, but the current implementation at least looks simpler.
+ * Note: pvals = NULL means legacy config system
  */
 static rsRetVal
-Load(uchar *pModName)
+Load(uchar *pModName, sbool bConfLoad, struct nvlst *lst)
 {
-	DEFiRet;
-	
 	size_t iPathLen, iModNameLen;
-	uchar szPath[PATH_MAX];
-	uchar *pModNameCmp;
 	int bHasExtension;
         void *pModHdlr, *pModInit;
 	modInfo_t *pModInfo;
+	cfgmodules_etry_t *pNew;
+	cfgmodules_etry_t *pLast;
 	uchar *pModDirCurr, *pModDirNext;
 	int iLoadCnt;
 	struct dlhandle_s *pHandle = NULL;
+#	ifdef PATH_MAX
+	uchar pathBuf[PATH_MAX+1];
+#	else
+	uchar pathBuf[4096];
+#	endif
+	uchar *pPathBuf = pathBuf;
+	size_t lenPathBuf = sizeof(pathBuf);
+	rsRetVal localRet;
+	DEFiRet;
 
 	assert(pModName != NULL);
-	dbgprintf("Requested to load module '%s'\n", pModName);
+	DBGPRINTF("Requested to load module '%s'\n", pModName);
 
-	pthread_mutex_lock(&mutLoadUnload);
+	iModNameLen = strlen((char*)pModName);
+	/* overhead for a full path is potentially 1 byte for a slash,
+	 * three bytes for ".so" and one byte for '\0'.
+	 */
+#	define PATHBUF_OVERHEAD 1 + iModNameLen + 3 + 1
 
-	iModNameLen = strlen((char *) pModName);
+	pthread_mutex_lock(&mutObjGlobalOp);
+
 	if(iModNameLen > 3 && !strcmp((char *) pModName + iModNameLen - 3, ".so")) {
 		iModNameLen -= 3;
-		bHasExtension = TRUE;
+		bHasExtension = RSTRUE;
 	} else
-		bHasExtension = FALSE;
+		bHasExtension = RSFALSE;
 
-	pModInfo = GetNxt(NULL);
-	while(pModInfo != NULL) {
-		if(!strncmp((char *) pModName, (char *) (pModNameCmp = modGetName(pModInfo)), iModNameLen) &&
-		   (!*(pModNameCmp + iModNameLen) || !strcmp((char *) pModNameCmp + iModNameLen, ".so"))) {
-			dbgprintf("Module '%s' already loaded\n", pModName);
-			ABORT_FINALIZE(RS_RET_OK);
+	CHKiRet(findModule(pModName, iModNameLen, &pModInfo));
+	if(pModInfo != NULL) {
+		DBGPRINTF("Module '%s' already loaded\n", pModName);
+		if(bConfLoad) {
+			localRet = readyModForCnf(pModInfo, &pNew, &pLast);
+			if(pModInfo->setModCnf != NULL && localRet == RS_RET_OK) {
+				if(!strncmp((char*)pModName, "builtin:", sizeof("builtin:")-1)) {
+					if(pModInfo->bSetModCnfCalled) {
+						errmsg.LogError(0, RS_RET_DUP_PARAM,
+						    "parameters for built-in module %s already set - ignored\n",
+						    pModName);
+						ABORT_FINALIZE(RS_RET_DUP_PARAM);
+					} else {
+						/* for built-in moules, we need to call setModConf, 
+						 * because there is no way to set parameters at load
+						 * time for obvious reasons...
+						 */
+						if(lst != NULL)
+							pModInfo->setModCnf(lst);
+						pModInfo->bSetModCnfCalled = 1;
+					}
+				} else {
+					/* regular modules need to be added to conf list (for
+					 * builtins, this happend during initial load).
+					 */
+					addModToCnfList(pNew, pLast);
+				}
+			}
 		}
-		pModInfo = GetNxt(pModInfo);
+		FINALIZE;
 	}
 
-	pModDirCurr = (uchar *)((pModDir == NULL) ? _PATH_MODDIR : (char *)pModDir);
+	pModDirCurr = (uchar *)((pModDir == NULL) ?
+		      _PATH_MODDIR : (char *)pModDir);
 	pModDirNext = NULL;
 	pModHdlr    = NULL;
 	iLoadCnt    = 0;
-	do {
-		/* now build our load module name */
+	do {	/* now build our load module name */
 		if(*pModName == '/' || *pModName == '.') {
-			*szPath = '\0';	/* we do not need to append the path - its already in the module name */
+			if(lenPathBuf < PATHBUF_OVERHEAD) {
+				if(pPathBuf != pathBuf) /* already malloc()ed memory? */
+					free(pPathBuf);
+				/* we always alloc enough memory for everything we potentiall need to add */
+				lenPathBuf = PATHBUF_OVERHEAD;
+				CHKmalloc(pPathBuf = malloc(sizeof(uchar)*lenPathBuf));
+			}
+			*pPathBuf = '\0';	/* we do not need to append the path - its already in the module name */
 			iPathLen = 0;
 		} else {
-			*szPath = '\0';
+			*pPathBuf = '\0';
 
 			iPathLen = strlen((char *)pModDirCurr);
 			pModDirNext = (uchar *)strchr((char *)pModDirCurr, ':');
@@ -821,30 +1143,27 @@ Load(uchar *pModName)
 					continue;
 				}
 				break;
-			} else if(iPathLen > sizeof(szPath) - 1) {
-				errmsg.LogError(0, NO_ERRCODE, "could not load module '%s', module path too long\n", pModName);
-				ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_PATHLEN);
+			} else if(iPathLen > lenPathBuf - PATHBUF_OVERHEAD) {
+				if(pPathBuf != pathBuf) /* already malloc()ed memory? */
+					free(pPathBuf);
+				/* we always alloc enough memory for everything we potentiall need to add */
+				lenPathBuf = iPathLen + PATHBUF_OVERHEAD;
+				CHKmalloc(pPathBuf = malloc(sizeof(uchar)*lenPathBuf));
 			}
 
-			strncat((char *) szPath, (char *)pModDirCurr, iPathLen);
-			iPathLen = strlen((char*) szPath);
+			memcpy((char *) pPathBuf, (char *)pModDirCurr, iPathLen);
+			if((pPathBuf[iPathLen - 1] != '/')) {
+				/* we have space, made sure in previous check */
+				pPathBuf[iPathLen++] = '/';
+			}
+			pPathBuf[iPathLen] = '\0';
 
 			if(pModDirNext)
 				pModDirCurr = pModDirNext + 1;
-
-			if((szPath[iPathLen - 1] != '/')) {
-				if((iPathLen <= sizeof(szPath) - 2)) {
-					szPath[iPathLen++] = '/';
-					szPath[iPathLen] = '\0';
-				} else {
-					errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_PATHLEN, "could not load module '%s', path too long\n", pModName);
-					ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_PATHLEN);
-				}
-			}
 		}
 
 		/* ... add actual name ... */
-		strncat((char *) szPath, (char *) pModName, sizeof(szPath) - iPathLen - 1);
+		strncat((char *) pPathBuf, (char *) pModName, lenPathBuf - iPathLen - 1);
 
 		/* now see if we have an extension and, if not, append ".so" */
 		if(!bHasExtension) {
@@ -852,18 +1171,11 @@ Load(uchar *pModName)
 			 * TODO: I guess this is highly importable, so we should change the
 			 * algo over time... -- rgerhards, 2008-03-05
 			 */
-			/* ... so now add the extension */
-			strncat((char *) szPath, ".so", sizeof(szPath) - strlen((char*) szPath) - 1);
-			iPathLen += 3;
-		}
-
-		if(iPathLen + strlen((char*) pModName) >= sizeof(szPath)) {
-			errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_PATHLEN, "could not load module '%s', path too long\n", pModName);
-			ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_PATHLEN);
+			strncat((char *) pPathBuf, ".so", lenPathBuf - strlen((char*) pPathBuf) - 1);
 		}
 
 		/* complete load path constructed, so ... GO! */
-		dbgprintf("loading module '%s'\n", szPath);
+		dbgprintf("loading module '%s'\n", pPathBuf);
 
 		/* see if we have this one already */
 		for (pHandle = pHandles; pHandle; pHandle = pHandle->next) {
@@ -875,7 +1187,7 @@ Load(uchar *pModName)
 
 		/* not found, try to dynamically link it */
 		if (!pModHdlr) {
-			pModHdlr = dlopen((char *) szPath, RTLD_NOW);
+			pModHdlr = dlopen((char *) pPathBuf, RTLD_NOW);
 		}
 
 		iLoadCnt++;
@@ -884,26 +1196,82 @@ Load(uchar *pModName)
 
 	if(!pModHdlr) {
 		if(iLoadCnt) {
-			errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_DLOPEN, "could not load module '%s', dlopen: %s\n", szPath, dlerror());
+			errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_DLOPEN, "could not load module '%s', dlopen: %s\n",
+					pPathBuf, dlerror());
 		} else {
-			errmsg.LogError(0, NO_ERRCODE, "could not load module '%s', ModDir was '%s'\n", szPath,
+			errmsg.LogError(0, NO_ERRCODE, "could not load module '%s', ModDir was '%s'\n", pPathBuf,
 			                               ((pModDir == NULL) ? _PATH_MODDIR : (char *)pModDir));
 		}
 		ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_DLOPEN);
 	}
 	if(!(pModInit = dlsym(pModHdlr, "modInit"))) {
-		errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_NO_INIT, "could not load module '%s', dlsym: %s\n", szPath, dlerror());
+		errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_NO_INIT,
+			 	"could not load module '%s', dlsym: %s\n", pPathBuf, dlerror());
 		dlclose(pModHdlr);
 		ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_NO_INIT);
 	}
-	if((iRet = doModInit(pModInit, (uchar*) pModName, pModHdlr)) != RS_RET_OK) {
-		errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_INIT_FAILED, "could not load module '%s', rsyslog error %d\n", szPath, iRet);
+	if((iRet = doModInit(pModInit, (uchar*) pModName, pModHdlr, &pModInfo)) != RS_RET_OK) {
+		errmsg.LogError(0, RS_RET_MODULE_LOAD_ERR_INIT_FAILED,
+				"could not load module '%s', rsyslog error %d\n", pPathBuf, iRet);
 		dlclose(pModHdlr);
 		ABORT_FINALIZE(RS_RET_MODULE_LOAD_ERR_INIT_FAILED);
 	}
 
+	if(bConfLoad) {
+		readyModForCnf(pModInfo, &pNew, &pLast);
+		if(pModInfo->setModCnf != NULL) {
+			if(lst != NULL) {
+				localRet = pModInfo->setModCnf(lst);
+				if(localRet != RS_RET_OK) {
+					errmsg.LogError(0, localRet,
+						"module '%s', failed processing config parameters",
+						pPathBuf);
+					abortCnfUse(pNew);
+					ABORT_FINALIZE(localRet);
+				}
+			}
+			pModInfo->bSetModCnfCalled = 1;
+		}
+		addModToCnfList(pNew, pLast);
+	}
+
 finalize_it:
-	pthread_mutex_unlock(&mutLoadUnload);
+	if(pPathBuf != pathBuf) /* used malloc()ed memory? */
+		free(pPathBuf);
+	pthread_mutex_unlock(&mutObjGlobalOp);
+	RETiRet;
+}
+
+
+/* the v6+ way of loading modules: process a "module(...)" directive.
+ * rgerhards, 2012-06-20
+ */
+rsRetVal
+modulesProcessCnf(struct cnfobj *o)
+{
+	struct cnfparamvals *pvals;
+	uchar *cnfModName = NULL;
+	int typeIdx;
+	DEFiRet;
+
+	pvals = nvlstGetParams(o->nvlst, &pblk, NULL);
+	if(pvals == NULL) {
+		ABORT_FINALIZE(RS_RET_ERR);
+	}
+	DBGPRINTF("modulesProcessCnf params:\n");
+	cnfparamsPrint(&pblk, pvals);
+	typeIdx = cnfparamGetIdx(&pblk, "load");
+	if(pvals[typeIdx].bUsed == 0) {
+		errmsg.LogError(0, RS_RET_CONF_RQRD_PARAM_MISSING, "module type missing");
+		ABORT_FINALIZE(RS_RET_CONF_RQRD_PARAM_MISSING);
+	}
+
+	cnfModName = (uchar*)es_str2cstr(pvals[typeIdx].val.d.estr, NULL);
+	iRet = Load(cnfModName, 1, o->nvlst);
+	
+finalize_it:
+	free(cnfModName);
+	cnfparamvalsDestruct(pvals, &pblk);
 	RETiRet;
 }
 
@@ -999,17 +1367,7 @@ BEGINObjClassExit(module, OBJ_IS_LOADABLE_MODULE) /* CHANGE class also in END MA
 CODESTARTObjClassExit(module)
 	/* release objects we no longer need */
 	objRelease(errmsg, CORE_COMPONENT);
-	objRelease(parser, CORE_COMPONENT);
-	/* We have a problem in our reference counting, which leads to this function
-	 * being called too early. This usually is no problem, but if we destroy
-	 * the mutex object, we get into trouble. So rather than finding the root cause,
-	 * we do not release the mutex right now and have a very, very slight leak.
-	 * We know that otherwise no bad effects happen, so this acceptable for the 
-	 * time being. -- rgerhards, 2009-05-25
-	 *
-	 * TODO: add again: pthread_mutex_destroy(&mutLoadUnload);
-	 */
-
+	free(pModDir);
 #	ifdef DEBUG
 	modUsrPrintAll(); /* debug aid - TODO: integrate with debug.c, at least the settings! */
 #	endif
@@ -1031,10 +1389,11 @@ CODESTARTobjQueryInterface(module)
 	 * of course, also affects the "if" above).
 	 */
 	pIf->GetNxt = GetNxt;
-	pIf->GetNxtType = GetNxtType;
+	pIf->GetNxtCnfType = GetNxtCnfType;
 	pIf->GetName = modGetName;
 	pIf->GetStateName = modGetStateName;
 	pIf->PrintList = modPrintList;
+	pIf->FindWithCnfName = FindWithCnfName;
 	pIf->UnloadAndDestructAll = modUnloadAndDestructAll;
 	pIf->doModInit = doModInit;
 	pIf->SetModDir = SetModDir;
@@ -1051,7 +1410,6 @@ ENDobjQueryInterface(module)
  */
 BEGINAbstractObjClassInit(module, 1, OBJ_IS_CORE_MODULE) /* class, version - CHANGE class also in END MACRO! */
 	uchar *pModPath;
-	pthread_mutexattr_t mutAttr;
 
 	/* use any module load path specified in the environment */
 	if((pModPath = (uchar*) getenv("RSYSLOG_MODDIR")) != NULL) {
@@ -1068,10 +1426,6 @@ BEGINAbstractObjClassInit(module, 1, OBJ_IS_CORE_MODULE) /* class, version - CHA
 	if(glblModPath != NULL) {
 		SetModDir(glblModPath);
 	}
-
-	pthread_mutexattr_init(&mutAttr);
-	pthread_mutexattr_settype(&mutAttr, PTHREAD_MUTEX_RECURSIVE);
-	pthread_mutex_init(&mutLoadUnload, &mutAttr);
 
 	/* request objects we use */
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));

@@ -1,10 +1,10 @@
 [Unit]
 Description=System Logging Service
+Requires=syslog.socket
 
 [Service]
-ExecStartPre=/bin/systemctl stop systemd-kmsg-syslogd.service
-ExecStart=@sbindir@/rsyslogd -n -c5
-Sockets=syslog.socket
+Type=notify
+ExecStart=@sbindir@/rsyslogd -n
 StandardOutput=null
 
 [Install]

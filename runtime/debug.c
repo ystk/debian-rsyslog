@@ -44,6 +44,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#ifdef HAVE_SYS_SYSCALL_H
+#  include <sys/syscall.h>
+#endif
 #if _POSIX_TIMERS <= 0
 #include <sys/time.h>
 #endif
@@ -57,7 +60,7 @@
 
 /* static data (some time to be replaced) */
 DEFobjCurrIf(obj)
-int Debug;		/* debug flag  - read-only after startup */
+int Debug = DEBUG_OFF;		/* debug flag  - read-only after startup */
 int debugging_on = 0;	 /* read-only, except on sig USR1 */
 static int bLogFuncFlow = 0; /* shall the function entry and exit be logged to the debug log? */
 static int bLogAllocFree = 0; /* shall calls to (m/c)alloc and free be logged to the debug log? */
@@ -66,9 +69,10 @@ static int bPrintMutexAction = 0; /* shall mutex calls be printed to the debug l
 static int bPrintTime = 1;	/* print a timestamp together with debug message */
 static int bPrintAllDebugOnExit = 0;
 static int bAbortTrace = 1;	/* print a trace after SIGABRT or SIGSEGV */
-static char *pszAltDbgFileName = NULL; /* if set, debug output is *also* sent to here */
-static int altdbg = -1;	/* and the handle for alternate debug output */
-static int stddbg;
+static int bOutputTidToStderr = 0;/* output TID to stderr on thread creation */
+char *pszAltDbgFileName = NULL; /* if set, debug output is *also* sent to here */
+int altdbg = -1;	/* and the handle for alternate debug output */
+int stddbg = 1; /* the handle for regular debug output, set to stdout if not forking, -1 otherwise */
 
 /* list of files/objects that should be printed */
 typedef struct dbgPrintName_s {
@@ -292,6 +296,21 @@ static inline void dbgFuncDBRemoveMutexLock(dbgFuncDB_t *pFuncDB, pthread_mutex_
 
 
 /* ------------------------- END FuncDB utility functions ------------------------- */ 
+
+/* output the current thread ID to "relevant" places
+ * (what "relevant" means is determinded by various ways)
+ */
+void
+dbgOutputTID(char* name)
+{
+#	if defined(HAVE_SYSCALL) && defined(HAVE_SYS_gettid)
+	if(bOutputTidToStderr)
+		fprintf(stderr, "thread tid %u, name '%s'\n",
+			(unsigned)syscall(SYS_gettid), name);
+	DBGPRINTF("thread created, tid %u, name '%s'\n",
+	          (unsigned)syscall(SYS_gettid), name);
+#	endif
+}
 
 /* ###########################################################################
  * 				IMPORTANT NOTE
@@ -676,10 +695,11 @@ static dbgThrdInfo_t *dbgGetThrdInfo(void)
 	pthread_mutex_lock(&mutCallStack);
 	if((pThrd = pthread_getspecific(keyCallStack)) == NULL) {
 		/* construct object */
-		pThrd = calloc(1, sizeof(dbgThrdInfo_t));
-		pThrd->thrd = pthread_self();
-		(void) pthread_setspecific(keyCallStack, pThrd);
-		DLL_Add(CallStack, pThrd);
+		if((pThrd = calloc(1, sizeof(dbgThrdInfo_t))) != NULL) {
+			pThrd->thrd = pthread_self();
+			(void) pthread_setspecific(keyCallStack, pThrd);
+			DLL_Add(CallStack, pThrd);
+		}
 	}
 	pthread_mutex_unlock(&mutCallStack);
 	return pThrd;
@@ -719,25 +739,27 @@ static void dbgGetThrdName(char *pszBuf, size_t lenBuf, pthread_t thrd, int bInc
 		snprintf(pszBuf, lenBuf, "%lx", (long) thrd);
 	} else {
 		if(bIncludeNumID) {
-			snprintf(pszBuf, lenBuf, "%s (%lx)", pThrd->pszThrdName, (long) thrd);
+			snprintf(pszBuf, lenBuf, "%-15s (%lx)", pThrd->pszThrdName, (long) thrd);
 		} else {
-			snprintf(pszBuf, lenBuf, "%s", pThrd->pszThrdName);
+			snprintf(pszBuf, lenBuf, "%-15s", pThrd->pszThrdName);
 		}
 	}
-
 }
 
 
 /* set a name for the current thread. The caller provided string is duplicated.
+ * Note: we must lock the "dbgprint" mutex, because dbgprint() uses the thread
+ * name and we could get a race (and abort) in cases where both are executed in
+ * parallel and we free or incompletely-copy the string.
  */
 void dbgSetThrdName(uchar *pszName)
 {
-return;
-
+	pthread_mutex_lock(&mutdbgprint);
 	dbgThrdInfo_t *pThrd = dbgGetThrdInfo();
 	if(pThrd->pszThrdName != NULL)
 		free(pThrd->pszThrdName);
 	pThrd->pszThrdName = strdup((char*)pszName);
+	pthread_mutex_unlock(&mutdbgprint);
 }
 
 
@@ -841,12 +863,15 @@ do_dbgprint(uchar *pszObjName, char *pszMsg, size_t lenMsg)
 	static int bWasNL = 0;
 	char pszThrdName[64]; /* 64 is to be on the safe side, anything over 20 is bad... */
 	char pszWriteBuf[32*1024];
+	size_t lenCopy;
+	size_t offsWriteBuf = 0;
 	size_t lenWriteBuf;
 	struct timespec t;
 #	if  _POSIX_TIMERS <= 0
 	struct timeval tv;
 #	endif
 
+#if 1
 	/* The bWasNL handler does not really work. It works if no thread
 	 * switching occurs during non-NL messages. Else, things are messed
 	 * up. Anyhow, it works well enough to provide useful help during
@@ -857,8 +882,8 @@ do_dbgprint(uchar *pszObjName, char *pszMsg, size_t lenMsg)
 	 */
 	if(ptLastThrdID != pthread_self()) {
 		if(!bWasNL) {
-			if(stddbg != -1) write(stddbg, "\n", 1);
-			if(altdbg != -1) write(altdbg, "\n", 1);
+			pszWriteBuf[0] = '\n';
+			offsWriteBuf = 1;
 			bWasNL = 1;
 		}
 		ptLastThrdID = pthread_self();
@@ -879,25 +904,32 @@ do_dbgprint(uchar *pszObjName, char *pszMsg, size_t lenMsg)
 			t.tv_sec = tv.tv_sec;
 			t.tv_nsec = tv.tv_usec * 1000;
 #			endif
-			lenWriteBuf = snprintf(pszWriteBuf, sizeof(pszWriteBuf),
+			lenWriteBuf = snprintf(pszWriteBuf+offsWriteBuf, sizeof(pszWriteBuf) - offsWriteBuf,
 				 	"%4.4ld.%9.9ld:", (long) (t.tv_sec % 10000), t.tv_nsec);
-			if(stddbg != -1) write(stddbg, pszWriteBuf, lenWriteBuf);
-			if(altdbg != -1) write(altdbg, pszWriteBuf, lenWriteBuf);
+			offsWriteBuf += lenWriteBuf;
 		}
 
-		lenWriteBuf = snprintf(pszWriteBuf, sizeof(pszWriteBuf), "%s: ", pszThrdName);
-		// use for testing: lenWriteBuf = snprintf(pszWriteBuf, sizeof(pszWriteBuf), "{%ld}%s: ", (long) syscall(SYS_gettid), pszThrdName);
-		if(stddbg != -1) write(stddbg, pszWriteBuf, lenWriteBuf);
-		if(altdbg != -1) write(altdbg, pszWriteBuf, lenWriteBuf);
+		lenWriteBuf = snprintf(pszWriteBuf + offsWriteBuf, sizeof(pszWriteBuf) - offsWriteBuf, "%s: ", pszThrdName);
+		offsWriteBuf += lenWriteBuf;
 		/* print object name header if we have an object */
 		if(pszObjName != NULL) {
-			lenWriteBuf = snprintf(pszWriteBuf, sizeof(pszWriteBuf), "%s: ", pszObjName);
-			if(stddbg != -1) write(stddbg, pszWriteBuf, lenWriteBuf);
-			if(altdbg != -1) write(altdbg, pszWriteBuf, lenWriteBuf);
+			lenWriteBuf = snprintf(pszWriteBuf + offsWriteBuf, sizeof(pszWriteBuf) - offsWriteBuf, "%s: ", pszObjName);
+			offsWriteBuf += lenWriteBuf;
 		}
 	}
-	if(stddbg != -1) write(stddbg, pszMsg, lenMsg);
-	if(altdbg != -1) write(altdbg, pszMsg, lenMsg);
+#endif
+	if(lenMsg > sizeof(pszWriteBuf) - offsWriteBuf) 
+		lenCopy = sizeof(pszWriteBuf) - offsWriteBuf;
+	else
+		lenCopy = lenMsg;
+	memcpy(pszWriteBuf + offsWriteBuf, pszMsg, lenCopy);
+	offsWriteBuf += lenCopy;
+	/* the write is included in an "if" just to silence compiler
+	 * warnings. Here, we really don't care if the write fails, we
+	 * have no good response to that in any case... -- rgerhards, 2012-11-28
+	 */
+	if(stddbg != -1) if(write(stddbg, pszWriteBuf, offsWriteBuf)){};
+	if(altdbg != -1) if(write(altdbg, pszWriteBuf, offsWriteBuf)){};
 
 	bWasNL = (pszMsg[lenMsg - 1] == '\n') ? 1 : 0;
 }
@@ -1286,6 +1318,15 @@ dbgmalloc(size_t size)
 }
 
 
+/* report fd used for debug log. This is needed in case of
+ * auto-backgrounding, where the debug log shall not be closed.
+ */
+int
+dbgGetDbglogFd(void)
+{
+	return altdbg;
+}
+
 /* read in the runtime options
  * rgerhards, 2008-02-28
  */
@@ -1297,8 +1338,6 @@ dbgGetRuntimeOptions(void)
 	uchar *optname;
 
 	/* set some defaults */
-	stddbg = 1;
-
 	if((pszOpts = (uchar*) getenv("RSYSLOG_DEBUG")) != NULL) {
 		/* we have options set, so let's process them */
 		while(dbgGetRTOptNamVal(&pszOpts, &optname, &optval)) {
@@ -1317,6 +1356,7 @@ dbgGetRuntimeOptions(void)
 					"PrintAllDebugInfoOnExit (not yet implemented)\n"
 					"NoLogTimestamp\n"
 					"Nostdoout\n"
+					"OutputTidToStderr\n"
 					"filetrace=file (may be provided multiple times)\n"
 					"DebugOnDemand - enables debugging on USR1, but does not turn on output\n"
 					"\nSee debug.html in your doc set or http://www.rsyslog.com for details\n");
@@ -1350,6 +1390,8 @@ dbgGetRuntimeOptions(void)
 				stddbg = -1;
 			} else if(!strcasecmp((char*)optname, "noaborttrace")) {
 				bAbortTrace = 0;
+			} else if(!strcasecmp((char*)optname, "outputtidtostderr")) {
+				bOutputTidToStderr = 1;
 			} else if(!strcasecmp((char*)optname, "filetrace")) {
 				if(*optval == '\0') {
 					fprintf(stderr, "rsyslogd " VERSION " error: logfile debug option requires filename, "
@@ -1368,10 +1410,30 @@ dbgGetRuntimeOptions(void)
 }
 
 
+void
+dbgSetDebugLevel(int level)
+{
+	Debug = level;
+	debugging_on = (level == DEBUG_FULL) ? 1 : 0;
+}
+
+void
+dbgSetDebugFile(uchar *fn)
+{
+	if(altdbg != -1) {
+		dbgprintf("switching to debug file %s\n", fn);
+		close(altdbg);
+	}
+	if((altdbg = open((char*)fn, O_WRONLY|O_CREAT|O_TRUNC|O_NOCTTY|O_CLOEXEC, S_IRUSR|S_IWUSR)) == -1) {
+		fprintf(stderr, "alternate debug file could not be opened, ignoring. Error: %s\n", strerror(errno));
+	}
+}
+
 /* end support system to set debug options at runtime */
 
 rsRetVal dbgClassInit(void)
 {
+	pthread_mutexattr_t mutAttr;
 	rsRetVal iRet;	/* do not use DEFiRet, as this makes calls into the debug system! */
 
 	struct sigaction sigAct;
@@ -1379,14 +1441,16 @@ rsRetVal dbgClassInit(void)
 	
 	(void) pthread_key_create(&keyCallStack, dbgCallStackDestruct); /* MUST be the first action done! */
 
-	/* we initialize all Mutexes with code, as some platforms seem to have
-	 * bugs in the static initializer macros. So better be on the safe side...
-	 * rgerhards, 2008-03-06
+	/* the mutexes must be recursive, because it may be called from within
+	 * signal handlers, which can lead to a hang if the signal interrupted dbgprintf
+	 * (yes, we have really seen that situation in practice!). -- rgerhards, 2013-05-17
 	 */
-	pthread_mutex_init(&mutFuncDBList, NULL);
-	pthread_mutex_init(&mutMutLog, NULL);
-	pthread_mutex_init(&mutCallStack, NULL);
-	pthread_mutex_init(&mutdbgprint, NULL);
+	pthread_mutexattr_init(&mutAttr);
+	pthread_mutexattr_settype(&mutAttr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&mutFuncDBList, &mutAttr);
+	pthread_mutex_init(&mutMutLog, &mutAttr);
+	pthread_mutex_init(&mutCallStack, &mutAttr);
+	pthread_mutex_init(&mutdbgprint, &mutAttr);
 
 	/* while we try not to use any of the real rsyslog code (to avoid infinite loops), we
 	 * need to have the ability to query object names. Thus, we need to obtain a pointer to

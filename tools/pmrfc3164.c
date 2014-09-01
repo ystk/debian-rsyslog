@@ -6,24 +6,23 @@
  *
  * File begun on 2009-11-04 by RGerhards
  *
- * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 #include "rsyslog.h"
@@ -75,17 +74,16 @@ ENDisCompatibleWithFeature
 BEGINparse
 	uchar *p2parse;
 	int lenMsg;
-	int bTAGCharDetected;
 	int i;	/* general index for parsing */
 	uchar bufParseTAG[CONF_TAG_MAXSIZE];
 	uchar bufParseHOSTNAME[CONF_HOSTNAME_MAXSIZE];
 CODESTARTparse
-	dbgprintf("Message will now be parsed by the legacy syslog parser (one size fits all... ;)).\n");
+	DBGPRINTF("Message will now be parsed by the legacy syslog parser (one size fits all... ;)).\n");
 	assert(pMsg != NULL);
 	assert(pMsg->pszRawMsg != NULL);
 	lenMsg = pMsg->iLenRawMsg - pMsg->offAfterPRI; /* note: offAfterPRI is already the number of PRI chars (do not add one!) */
 	p2parse = pMsg->pszRawMsg + pMsg->offAfterPRI; /* point to start of text, after PRI */
-	setProtocolVersion(pMsg, 0);
+	setProtocolVersion(pMsg, MSG_LEGACY_PROTOCOL);
 
 	/* Check to see if msg contains a timestamp. We start by assuming
 	 * that the message timestamp is the time of reception (which we 
@@ -95,12 +93,14 @@ CODESTARTparse
 	 */
 	if(datetime.ParseTIMESTAMP3339(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
 		/* we are done - parse pointer is moved by ParseTIMESTAMP3339 */;
-	} else if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
+	} else if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg, NO_PARSE3164_TZSTRING) == RS_RET_OK) {
+		if(pMsg->dfltTZ[0] != '\0')
+			applyDfltTZ(&pMsg->tTIMESTAMP, pMsg->dfltTZ);
 		/* we are done - parse pointer is moved by ParseTIMESTAMP3164 */;
 	} else if(*p2parse == ' ' && lenMsg > 1) { /* try to see if it is slighly malformed - HP procurve seems to do that sometimes */
 		++p2parse;	/* move over space */
 		--lenMsg;
-		if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg) == RS_RET_OK) {
+		if(datetime.ParseTIMESTAMP3164(&(pMsg->tTIMESTAMP), &p2parse, &lenMsg, NO_PARSE3164_TZSTRING) == RS_RET_OK) {
 			/* indeed, we got it! */
 			/* we are done - parse pointer is moved by ParseTIMESTAMP3164 */;
 		} else {/* parse pointer needs to be restored, as we moved it off-by-one
@@ -137,10 +137,9 @@ CODESTARTparse
 		 * rgerhards, 2009-06-23: and I now have extended this logic to every character
 		 * that is not a valid hostname.
 		 */
-		bTAGCharDetected = 0;
 		if(lenMsg > 0 && pMsg->msgFlags & PARSE_HOSTNAME) {
 			i = 0;
-			while(i < lenMsg && (isalnum(p2parse[i]) || p2parse[i] == '.' || p2parse[i] == '.'
+			while(i < lenMsg && (isalnum(p2parse[i]) || p2parse[i] == '.'
 				|| p2parse[i] == '_' || p2parse[i] == '-') && i < (CONF_HOSTNAME_MAXSIZE - 1)) {
 				bufParseHOSTNAME[i] = p2parse[i];
 				++i;
@@ -231,7 +230,7 @@ CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(parser, CORE_COMPONENT));
 	CHKiRet(objUse(datetime, CORE_COMPONENT));
 
-	dbgprintf("rfc3164 parser init called\n");
+	DBGPRINTF("rfc3164 parser init called\n");
  	bParseHOSTNAMEandTAG = glbl.GetParseHOSTNAMEandTAG(); /* cache value, is set only during rsyslogd option processing */
 
 

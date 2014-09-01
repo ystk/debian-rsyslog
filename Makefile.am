@@ -1,6 +1,8 @@
 sbin_PROGRAMS =
 pkglib_LTLIBRARIES = 
 
+pkgconfigdir = $(libdir)/pkgconfig
+
 if ENABLE_INET
 pkglib_LTLIBRARIES += lmtcpsrv.la lmtcpclt.la
 #
@@ -56,10 +58,12 @@ CLEANFILES = \
 endif
 
 EXTRA_DIST = \
-	freebsd/rsyslogd \
-	slackware/rc.rsyslogd \
+	README.md \
+	platform/README \
+	platform/freebsd/rsyslogd \
+	platform/slackware/rc.rsyslogd \
+	platform/redhat/rsyslog.conf \
 	contrib/README \
-	rsyslog.conf \
 	COPYING \
 	COPYING.LESSER \
 	COPYING.ASL20 \
@@ -68,7 +72,9 @@ EXTRA_DIST = \
 	contrib/gnutls/key.pem \
 	rsyslog.service.in
 
-SUBDIRS = doc runtime . plugins/immark plugins/imuxsock plugins/imtcp plugins/imudp plugins/omtesting
+SUBDIRS = compat runtime grammar . plugins/immark plugins/imuxsock plugins/imtcp plugins/imudp plugins/omtesting
+# external plugin driver is always enabled (core component)
+SUBDIRS += plugins/mmexternal
 
 if ENABLE_RSYSLOGD
 SUBDIRS += tools
@@ -76,6 +82,10 @@ endif
 
 if ENABLE_IMKLOG
 SUBDIRS += plugins/imklog
+endif
+
+if ENABLE_IMKMSG
+SUBDIRS += plugins/imkmsg
 endif
 
 if ENABLE_IMPSTATS
@@ -110,16 +120,8 @@ if ENABLE_SNMP
 SUBDIRS += plugins/omsnmp
 endif
 
-if ENABLE_CUST1
-SUBDIRS += plugins/cust1
-endif
-
 if ENABLE_SMCUSTBINDCDR
 SUBDIRS += plugins/sm_cust_bindcdr
-endif
-
-if ENABLE_IMTEMPLATE
-SUBDIRS += plugins/imtemplate
 endif
 
 if ENABLE_OMSTDOUT
@@ -128,6 +130,10 @@ endif
 
 if ENABLE_PMCISCONAMES
 SUBDIRS += plugins/pmcisconames
+endif
+
+if ENABLE_PMCISCOIOS
+SUBDIRS += plugins/pmciscoios
 endif
 
 if ENABLE_PMAIXFORWARDEDFROM
@@ -150,12 +156,28 @@ if ENABLE_OMRULESET
 SUBDIRS += plugins/omruleset
 endif
 
-if ENABLE_OMDBALERTING
-SUBDIRS += plugins/omdbalerting
-endif
-
 if ENABLE_OMUDPSPOOF
 SUBDIRS += plugins/omudpspoof
+endif
+
+if ENABLE_OMMONGODB
+SUBDIRS += plugins/ommongodb
+endif
+
+if ENABLE_OMHIREDIS
+SUBDIRS += plugins/omhiredis
+endif
+
+if ENABLE_OMZMQ3
+SUBDIRS += plugins/omzmq3
+endif
+
+if ENABLE_OMRABBITMQ
+SUBDIRS += plugins/omrabbitmq
+endif
+
+if ENABLE_IMZMQ3
+SUBDIRS += plugins/imzmq3
 endif
 
 if ENABLE_OMUXSOCK
@@ -166,8 +188,16 @@ if ENABLE_OMHDFS
 SUBDIRS += plugins/omhdfs
 endif
 
-if ENABLE_OMTEMPLATE
-SUBDIRS += plugins/omtemplate
+if ENABLE_OMJOURNAL
+SUBDIRS += plugins/omjournal
+endif
+
+if ENABLE_IMJOURNAL
+SUBDIRS += plugins/imjournal
+endif
+
+if ENABLE_ELASTICSEARCH
+SUBDIRS += plugins/omelasticsearch
 endif
 
 if ENABLE_MMSNMPTRAPD
@@ -180,6 +210,10 @@ endif
 
 if ENABLE_IMPTCP
 SUBDIRS += plugins/imptcp
+endif
+
+if ENABLE_IMTTCP
+SUBDIRS += plugins/imttcp
 endif
 
 if ENABLE_IMDIAG
@@ -196,6 +230,46 @@ endif
 
 if ENABLE_RFC3195
 SUBDIRS += plugins/im3195
+endif
+
+if ENABLE_MMNORMALIZE
+SUBDIRS += plugins/mmnormalize
+endif
+
+if ENABLE_MMJSONPARSE
+SUBDIRS += plugins/mmjsonparse
+endif
+
+if ENABLE_MMAUDIT
+SUBDIRS += plugins/mmaudit
+endif
+
+if ENABLE_MMANON
+SUBDIRS += plugins/mmanon
+endif
+
+if ENABLE_MMUTF8FIX
+SUBDIRS += plugins/mmutf8fix
+endif
+
+if ENABLE_MMCOUNT
+SUBDIRS += plugins/mmcount
+endif
+
+if ENABLE_MMSEQUENCE
+SUBDIRS += plugins/mmsequence
+endif
+
+if ENABLE_MMFIELDS
+SUBDIRS += plugins/mmfields
+endif
+
+if ENABLE_MMPSTRUCDATA
+SUBDIRS += plugins/mmpstrucdata
+endif
+
+if ENABLE_MMRFC5424ADDHMAC
+SUBDIRS += plugins/mmrfc5424addhmac
 endif
 
 if ENABLE_ORACLE
@@ -217,10 +291,8 @@ SUBDIRS += tests
 # temporarily be removed below. The intent behind forcing everthing to compile
 # in a make distcheck is so that we detect code that accidently was not updated
 # when some global update happened.
-DISTCHECK_CONFIGURE_FLAGS=	--enable-gssapi_krb5 \
-				--enable-imfile \
+DISTCHECK_CONFIGURE_FLAGS=	--enable-imfile \
 				--enable-snmp \
-				--enable-pgsql \
 				--enable-libdbi \
 				--enable-mysql \
 				--enable-relp \
@@ -235,16 +307,19 @@ DISTCHECK_CONFIGURE_FLAGS=	--enable-gssapi_krb5 \
 				--enable-omprog \
 				--enable-imdiag \
 				--enable-imptcp \
+				--enable-imttcp \
 				--enable-omuxsock \
-				--enable-extended-tests \
 				--enable-impstats \
-				--enable-imptcp \
 				--enable-memcheck \
 				--enable-pmaixforwardedfrom \
 				--enable-pmcisconames \
 				--enable-pmsnare \
-				--enable-imtemplate \
-				--enable-omtemplate \
-				--enable-mmsnmptrapd \
-				--with-systemdsystemunitdir=$$dc_install_base/$(systemdsystemunitdir)
+				--enable-elasticsearch \
+				--enable-valgrind \
+				--with-systemdsystemunitdir=$$dc_install_base/$(systemdsystemunitdir) 
+# temporarily disable these checks for make distcheck 2012-09-06 rgerhards
+#				--enable-mmsnmptrapd \
+#				--enable-gssapi_krb5 \
+#				--enable-extended-tests \
+#				--enable-pgsql 
 ACLOCAL_AMFLAGS = -I m4

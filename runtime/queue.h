@@ -30,6 +30,7 @@
 #include "batch.h"
 #include "stream.h"
 #include "statsobj.h"
+#include "cryprov.h"
 
 /* support for the toDelete list */
 typedef struct toDeleteLst_s toDeleteLst_t;
@@ -51,7 +52,7 @@ typedef enum {
 /* list member definition for linked list types of queues: */
 typedef struct qLinkedList_S {
 	struct qLinkedList_S *pNext;
-	void *pUsr;
+	msg_t *pMsg;
 } qLinkedList_t;
 
 
@@ -71,7 +72,7 @@ struct queue_s {
 	int	iMinMsgsPerWrkr;/* minimum nbr of msgs per worker thread, if more, a new worker is started until max wrkrs */
 	wtp_t	*pWtpDA;
 	wtp_t	*pWtpReg;
-	void	*pUsr;		/* a global, user-supplied pointer. Is passed back to consumer. */
+	action_t *pAction;	/* for action queues, ptr to action object; for main queues unused */
 	int	iUpdsSincePersist;/* nbr of queue updates since the last persist call */
 	int	iPersistUpdCnt;	/* persits queue info after this nbr of updates - 0 -> persist only on shutdown */
 	sbool	bSyncQueueFiles;/* if working with files, sync them after each write? */
@@ -102,17 +103,16 @@ struct queue_s {
 	 * the user really wanted...). -- rgerhards, 2008-04-02
 	 */
 	/* end dequeue time window */
-	rsRetVal (*pConsumer)(void *,batch_t*,int*); /* user-supplied consumer function for dequeued messages */
+	rsRetVal (*pConsumer)(void *,batch_t*, wti_t*); /* user-supplied consumer function for dequeued messages */
 	/* calling interface for pConsumer: arg1 is the global user pointer from this structure, arg2 is the
 	 * user pointer array that was dequeued (actual sample: for actions, arg1 is the pAction and arg2
-	 * is pointer to an array of message message pointers), arg3 is a pointer to an interger which is zero
-	 * during normal operations and one if the consumer must urgently shut down.
+	 * is pointer to an array of message message pointers)
 	 */
 	/* type-specific handlers (set during construction) */
 	rsRetVal (*qConstruct)(struct queue_s *pThis);
 	rsRetVal (*qDestruct)(struct queue_s *pThis);
-	rsRetVal (*qAdd)(struct queue_s *pThis, void *pUsr);
-	rsRetVal (*qDeq)(struct queue_s *pThis, void **ppUsr);
+	rsRetVal (*qAdd)(struct queue_s *pThis, msg_t *pMsg);
+	rsRetVal (*qDeq)(struct queue_s *pThis, msg_t **ppMsg);
 	rsRetVal (*qDel)(struct queue_s *pThis);
 	/* end type-specific handler */
 	/* public entry points (set during construction, permit to set best algorithm for params selected) */
@@ -121,7 +121,7 @@ struct queue_s {
 	/* synchronization variables */
 	pthread_mutex_t mutThrdMgmt; /* mutex for the queue's thread management */
 	pthread_mutex_t *mut; /* mutex for enqueing and dequeueing messages */
-	pthread_cond_t notFull, notEmpty;
+	pthread_cond_t notFull;
 	pthread_cond_t belowFullDlyWtrMrk; /* below eFLOWCTL_FULL_DELAY watermark */
 	pthread_cond_t belowLightDlyWtrMrk; /* below eFLOWCTL_FULL_DELAY watermark */
 	int bThrdStateChanged;		/* at least one thread state has changed if 1 */
@@ -135,6 +135,8 @@ struct queue_s {
 	size_t lenSpoolDir;
 	uchar *pszFilePrefix;
 	size_t lenFilePrefix;
+	uchar *pszQIFNam;	/* full .qi file name, based on parts above */
+	size_t lenQIFNam;
 	int iNumberFiles;	/* how many files make up the queue? */
 	int64 iMaxFileSize;	/* max size for a single queue file */
 	int64 sizeOnDiskMax;    /* maximum size on disk allowed */
@@ -145,7 +147,8 @@ struct queue_s {
 	struct queue_s *pqParent;/* pointer to the parent (if this is a child queue) */
 	int	bDAEnqOnly;	/* EnqOnly setting for DA queue */
 	/* now follow queueing mode specific data elements */
-	union {			/* different data elements based on queue type (qType) */
+	//union {			/* different data elements based on queue type (qType) */
+	struct {			/* different data elements based on queue type (qType) */
 		struct {
 			long deqhead, head, tail;
 			void** pBuf;		/* the queued user data structure */
@@ -157,18 +160,27 @@ struct queue_s {
 		} linklist;
 		struct {
 			int64 sizeOnDisk; /* current amount of disk space used */
-			int64 bytesRead;  /* number of bytes read from current (undeleted!) file */
+			int64 deqOffs; /* offset after dequeue batch - used for file deleter */
+			int deqFileNumIn; /* same for the circular file numbers, mainly for  */
+			int deqFileNumOut;/* deleting finished files */
 			strm_t *pWrite;   /* current file to be written */
 			strm_t *pReadDeq; /* current file for dequeueing */
 			strm_t *pReadDel; /* current file for deleting */
 		} disk;
 	} tVars;
-	DEF_ATOMIC_HELPER_MUT(mutQueueSize);
-	DEF_ATOMIC_HELPER_MUT(mutLogDeq);
+	sbool	useCryprov;	/* quicker than checkig ptr (1 vs 8 bytes!) */
+	uchar *cryprovName; /* crypto provider to use */
+	cryprov_if_t cryprov;	/* ptr to crypto provider interface */
+	void *cryprovData; /* opaque data ptr for provider use */
+	uchar 	*cryprovNameFull;/* full internal crypto provider name */
+	DEF_ATOMIC_HELPER_MUT(mutQueueSize)
+	DEF_ATOMIC_HELPER_MUT(mutLogDeq)
 	/* for statistics subsystem */
 	statsobj_t *statsobj;
-	STATSCOUNTER_DEF(ctrEnqueued, mutCtrEnqueued);
-	STATSCOUNTER_DEF(ctrFull, mutCtrFull);
+	STATSCOUNTER_DEF(ctrEnqueued, mutCtrEnqueued)
+	STATSCOUNTER_DEF(ctrFull, mutCtrFull)
+	STATSCOUNTER_DEF(ctrFDscrd, mutCtrFDscrd)
+	STATSCOUNTER_DEF(ctrNFDscrd, mutCtrNFDscrd)
 	int ctrMaxqsize; /* NOT guarded by a mutex */
 };
 
@@ -182,14 +194,18 @@ struct queue_s {
 
 /* prototypes */
 rsRetVal qqueueDestruct(qqueue_t **ppThis);
-rsRetVal qqueueEnqObjDirect(qqueue_t *pThis, void *pUsr);
-rsRetVal qqueueEnqObj(qqueue_t *pThis, flowControl_t flwCtlType, void *pUsr);
+rsRetVal qqueueEnqMsg(qqueue_t *pThis, flowControl_t flwCtlType, msg_t *pMsg);
 rsRetVal qqueueStart(qqueue_t *pThis);
 rsRetVal qqueueSetMaxFileSize(qqueue_t *pThis, size_t iMaxFileSize);
 rsRetVal qqueueSetFilePrefix(qqueue_t *pThis, uchar *pszPrefix, size_t iLenPrefix);
 rsRetVal qqueueConstruct(qqueue_t **ppThis, queueType_t qType, int iWorkerThreads,
-		        int iMaxQueueSize, rsRetVal (*pConsumer)(void*,batch_t*, int*));
-rsRetVal qqueueEnqObjDirectBatch(qqueue_t *pThis, batch_t *pBatch);
+		        int iMaxQueueSize, rsRetVal (*pConsumer)(void*,batch_t*, wti_t *));
+int queueCnfParamsSet(struct nvlst *lst);
+rsRetVal qqueueApplyCnfParam(qqueue_t *pThis, struct nvlst *lst);
+void qqueueSetDefaultsRulesetQueue(qqueue_t *pThis);
+void qqueueSetDefaultsActionQueue(qqueue_t *pThis);
+void qqueueDbgPrint(qqueue_t *pThis);
+
 PROTOTYPEObjClassInit(qqueue);
 PROTOTYPEpropSetMeth(qqueue, iPersistUpdCnt, int);
 PROTOTYPEpropSetMeth(qqueue, bSyncQueueFiles, int);
@@ -199,16 +215,22 @@ PROTOTYPEpropSetMeth(qqueue, toQShutdown, long);
 PROTOTYPEpropSetMeth(qqueue, toActShutdown, long);
 PROTOTYPEpropSetMeth(qqueue, toWrkShutdown, long);
 PROTOTYPEpropSetMeth(qqueue, toEnq, long);
+PROTOTYPEpropSetMeth(qqueue, iLightDlyMrk, int);
 PROTOTYPEpropSetMeth(qqueue, iHighWtrMrk, int);
 PROTOTYPEpropSetMeth(qqueue, iLowWtrMrk, int);
 PROTOTYPEpropSetMeth(qqueue, iDiscardMrk, int);
 PROTOTYPEpropSetMeth(qqueue, iDiscardSeverity, int);
 PROTOTYPEpropSetMeth(qqueue, iMinMsgsPerWrkr, int);
+PROTOTYPEpropSetMeth(qqueue, iNumWorkerThreads, int);
 PROTOTYPEpropSetMeth(qqueue, bSaveOnShutdown, int);
-PROTOTYPEpropSetMeth(qqueue, pUsr, void*);
+PROTOTYPEpropSetMeth(qqueue, pAction, action_t*);
 PROTOTYPEpropSetMeth(qqueue, iDeqSlowdown, int);
 PROTOTYPEpropSetMeth(qqueue, sizeOnDiskMax, int64);
 PROTOTYPEpropSetMeth(qqueue, iDeqBatchSize, int);
 #define qqueueGetID(pThis) ((unsigned long) pThis)
+
+#ifdef ENABLE_IMDIAG
+extern unsigned int iOverallQueueSize;
+#endif
 
 #endif /* #ifndef QUEUE_H_INCLUDED */

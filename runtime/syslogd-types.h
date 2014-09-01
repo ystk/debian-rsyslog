@@ -31,8 +31,9 @@
 #include <syslog.h>
 #endif
 
-#define FALSE 0
-#define TRUE 1
+/* we use RSTRUE/FALSE to prevent name claches with other packages */
+#define RSFALSE 0
+#define RSTRUE 1
 
 #ifdef UT_NAMESIZE
 # define UNAMESZ	UT_NAMESIZE	/* length of a login name */
@@ -104,6 +105,17 @@ struct syslogTime {
 	int secfrac;	/* fractional seconds (must be 32 bit!) */
 };
 typedef struct syslogTime syslogTime_t;
+
+struct tzinfo {
+	char *id;
+	char offsMode;
+	int8_t offsHour;
+	int8_t offsMin;
+};
+typedef struct tzinfo tzinfo_t;
+
+typedef enum 	{ ACT_STRING_PASSING = 0, ACT_ARRAY_PASSING = 1, ACT_MSG_PASSING = 2,
+	  ACT_JSON_PASSING = 3} paramPassing_t;
 
 #endif /* #ifndef SYSLOGD_TYPES_INCLUDED */
 /* vi:set ai:

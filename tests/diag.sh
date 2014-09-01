@@ -10,13 +10,12 @@
 #valgrind="valgrind --tool=helgrind --log-fd=1"
 #valgrind="valgrind --tool=exp-ptrcheck --log-fd=1"
 #set -o xtrace
-#export RSYSLOG_DEBUG="debug nologfuncflow noprintmutexaction stdout"
+#export RSYSLOG_DEBUG="debug nologfuncflow noprintmutexaction nostdout"
 #export RSYSLOG_DEBUGLOG="log"
 case $1 in
    'init')	$srcdir/killrsyslog.sh # kill rsyslogd if it runs for some reason
 		cp $srcdir/testsuites/diag-common.conf diag-common.conf
 		cp $srcdir/testsuites/diag-common2.conf diag-common2.conf
-		rm -f rsyslog.action.*.include
 		rm -f rsyslogd.started work-*.conf rsyslog.random.data
 		rm -f rsyslogd2.started work-*.conf
 		rm -f work rsyslog.out.log rsyslog2.out.log rsyslog.out.log.save # common work files
@@ -24,6 +23,10 @@ case $1 in
 		rm -f rsyslog.out.*.log work-presort rsyslog.pipe
 		rm -f rsyslog.input rsyslog.empty
 		rm -f core.* vgcore.*
+		# Note: rsyslog.action.*.include must NOT be deleted, as it
+		# is used to setup some parameters BEFORE calling init. This
+		# happens in chained test scripts. Delete on exit is fine,
+		# though.
 		mkdir test-spool
 		;;
    'exit')	rm -f rsyslogd.started work-*.conf diag-common.conf
@@ -31,17 +34,17 @@ case $1 in
 		rm -f work rsyslog.out.log rsyslog2.out.log rsyslog.out.log.save # common work files
 		rm -rf test-spool test-logdir stat-file1
 		rm -f rsyslog.out.*.log rsyslog.random.data work-presort rsyslog.pipe
-		rm -f rsyslog.input stat-file1 #rsyslog.empty
+		rm -f rsyslog.input rsyslog.conf.tlscert stat-file1 rsyslog.empty
 		echo  -------------------------------------------------------------------------------
 		;;
    'startup')   # start rsyslogd with default params. $2 is the config file name to use
    		# returns only after successful startup, $3 is the instance (blank or 2!)
-		$valgrind ../tools/rsyslogd -c6 -u2 -n -irsyslog$3.pid -M../runtime/.libs:../.libs -f$srcdir/testsuites/$2 &
+		$valgrind ../tools/rsyslogd -u2 -n -irsyslog$3.pid -M../runtime/.libs:../.libs -f$srcdir/testsuites/$2 &
    		$srcdir/diag.sh wait-startup $3
 		;;
    'startup-vg') # start rsyslogd with default params under valgrind control. $2 is the config file name to use
    		# returns only after successful startup, $3 is the instance (blank or 2!)
-		valgrind --error-exitcode=10 --malloc-fill=ff --free-fill=fe --leak-check=full ../tools/rsyslogd -c6 -u2 -n -irsyslog$3.pid -M../runtime/.libs:../.libs -f$srcdir/testsuites/$2 &
+		valgrind --log-fd=1 --error-exitcode=10 --malloc-fill=ff --free-fill=fe --leak-check=full ../tools/rsyslogd -u2 -n -irsyslog$3.pid -M../runtime/.libs:../.libs -f$srcdir/testsuites/$2 &
    		$srcdir/diag.sh wait-startup $3
 		;;
    'wait-startup') # wait for rsyslogd startup ($2 is the instance)
@@ -106,6 +109,7 @@ case $1 in
 		   echo Shutting down instance 2
 		fi
    		$srcdir/diag.sh wait-queueempty $2
+		./msleep 100 # wait 100 milliseconds
 		kill `cat rsyslog$2.pid`
 		# note: we do not wait for the actual termination!
 		;;
@@ -138,7 +142,7 @@ case $1 in
    'seq-check') # do the usual sequence check to see if everything was properly received. $2 is the instance.
 		rm -f work
 		cp rsyslog.out.log work-presort
-		sort < rsyslog.out.log > work
+		sort -g < rsyslog.out.log > work
 		# $4... are just to have the abilit to pass in more options...
 		# add -v to chkseq if you need more verbose output
 		./chkseq -fwork -s$2 -e$3 $4 $5 $6 $7
@@ -151,7 +155,7 @@ case $1 in
    		# a duplicateof seq-check, but we could not change its calling conventions without
 		# breaking a lot of exitings test cases, so we preferred to duplicate the code here.
 		rm -f work2
-		sort < rsyslog2.out.log > work2
+		sort -g < rsyslog2.out.log > work2
 		# $4... are just to have the abilit to pass in more options...
 		# add -v to chkseq if you need more verbose output
 		./chkseq -fwork2 -s$2 -e$3 $4 $5 $6 $7
@@ -164,7 +168,7 @@ case $1 in
    'gzip-seq-check') # do the usual sequence check, but for gzip files
 		rm -f work
 		ls -l rsyslog.out.log
-		gunzip < rsyslog.out.log | sort > work
+		gunzip < rsyslog.out.log | sort -g > work
 		ls -l work
 		# $4... are just to have the abilit to pass in more options...
 		./chkseq -fwork -v -s$2 -e$3 $4 $5 $6 $7
@@ -186,6 +190,13 @@ case $1 in
 		else
 		   ZCAT=zcat
 		fi
+		;;
+   'generate-HOSTNAME')   # generate the HOSTNAME file
+		source $srcdir/diag.sh startup gethostname.conf
+		source $srcdir/diag.sh tcpflood -m1 -M "<128>"
+		./msleep 100
+		source $srcdir/diag.sh shutdown-when-empty # shut down rsyslogd when done processing messages
+		source $srcdir/diag.sh wait-shutdown	# we need to wait until rsyslogd is finished!
 		;;
    *)		echo "invalid argument" $1
 esac

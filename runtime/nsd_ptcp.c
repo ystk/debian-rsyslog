@@ -2,7 +2,7 @@
  *
  * An implementation of the nsd interface for plain tcp sockets.
  * 
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -50,6 +50,8 @@
 #include "nsdsel_ptcp.h"
 #include "nsdpoll_ptcp.h"
 #include "nsd_ptcp.h"
+#include "prop.h"
+#include "dnscache.h"
 
 MODULE_TYPE_LIB
 MODULE_TYPE_NOKEEP
@@ -61,6 +63,7 @@ DEFobjCurrIf(glbl)
 DEFobjCurrIf(net)
 DEFobjCurrIf(netstrms)
 DEFobjCurrIf(netstrm)
+DEFobjCurrIf(prop)
 
 
 /* a few deinit helpers */
@@ -86,10 +89,9 @@ ENDobjConstruct(nsd_ptcp)
 BEGINobjDestruct(nsd_ptcp) /* be sure to specify the object type also in END and CODESTART macros! */
 CODESTARTobjDestruct(nsd_ptcp)
 	sockClose(&pThis->sock);
-	if(pThis->pRemHostIP != NULL)
-		free(pThis->pRemHostIP);
-	if(pThis->pRemHostName != NULL)
-		free(pThis->pRemHostName);
+	if(pThis->remoteIP != NULL)
+		prop.Destruct(&pThis->remoteIP);
+	free(pThis->pRemHostName);
 ENDobjDestruct(nsd_ptcp)
 
 
@@ -248,67 +250,24 @@ Abort(nsd_t *pNsd)
  * rgerhards, 2008-03-31
  */
 static rsRetVal
-FillRemHost(nsd_ptcp_t *pThis, struct sockaddr *pAddr)
+FillRemHost(nsd_ptcp_t *pThis, struct sockaddr_storage *pAddr)
 {
-	int error;
-	uchar szIP[NI_MAXHOST] = "";
-	uchar szHname[NI_MAXHOST] = "";
-	struct addrinfo hints, *res;
-	size_t len;
+	prop_t *fqdn;
 	
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, nsd_ptcp);
 	assert(pAddr != NULL);
 
-        error = getnameinfo(pAddr, SALEN(pAddr), (char*)szIP, sizeof(szIP), NULL, 0, NI_NUMERICHOST);
-
-        if(error) {
-                dbgprintf("Malformed from address %s\n", gai_strerror(error));
-		strcpy((char*)szHname, "???");
-		strcpy((char*)szIP, "???");
-		ABORT_FINALIZE(RS_RET_INVALID_HNAME);
-	}
-
-	if(!glbl.GetDisableDNS()) {
-		error = getnameinfo(pAddr, SALEN(pAddr), (char*)szHname, NI_MAXHOST, NULL, 0, NI_NAMEREQD);
-		if(error == 0) {
-			memset (&hints, 0, sizeof (struct addrinfo));
-			hints.ai_flags = AI_NUMERICHOST;
-			hints.ai_socktype = SOCK_STREAM;
-			/* we now do a lookup once again. This one should fail,
-			 * because we should not have obtained a non-numeric address. If
-			 * we got a numeric one, someone messed with DNS!
-			 */
-			if(getaddrinfo((char*)szHname, NULL, &hints, &res) == 0) {
-				freeaddrinfo (res);
-				/* OK, we know we have evil, so let's indicate this to our caller */
-				snprintf((char*)szHname, NI_MAXHOST, "[MALICIOUS:IP=%s]", szIP);
-				dbgprintf("Malicious PTR record, IP = \"%s\" HOST = \"%s\"", szIP, szHname);
-				iRet = RS_RET_MALICIOUS_HNAME;
-			}
-		} else {
-			strcpy((char*)szHname, (char*)szIP);
-		}
-	} else {
-		strcpy((char*)szHname, (char*)szIP);
-	}
+	CHKiRet(dnscacheLookup(pAddr, &fqdn, NULL, NULL, &pThis->remoteIP));
 
 	/* We now have the names, so now let's allocate memory and store them permanently.
 	 * (side note: we may hold on to these values for quite a while, thus we trim their
 	 * memory consumption)
 	 */
-	len = strlen((char*)szIP) + 1; /* +1 for \0 byte */
-	if((pThis->pRemHostIP = MALLOC(len)) == NULL)
+	if((pThis->pRemHostName = MALLOC(prop.GetStringLen(fqdn)+1)) == NULL)
 		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-	memcpy(pThis->pRemHostIP, szIP, len);
-
-	len = strlen((char*)szHname) + 1; /* +1 for \0 byte */
-	if((pThis->pRemHostName = MALLOC(len)) == NULL) {
-		free(pThis->pRemHostIP); /* prevent leak */
-		pThis->pRemHostIP = NULL;
-		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-	}
-	memcpy(pThis->pRemHostName, szHname, len);
+	memcpy(pThis->pRemHostName, propGetSzStr(fqdn), prop.GetStringLen(fqdn)+1);
+	prop.Destruct(&fqdn);
 
 finalize_it:
 	RETiRet;
@@ -352,7 +311,7 @@ AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 	 * of this function. -- rgerhards, 2008-12-01
 	 */
 	memcpy(&pNew->remAddr, &addr, sizeof(struct sockaddr_storage));
-	CHKiRet(FillRemHost(pNew, (struct sockaddr*) &addr));
+	CHKiRet(FillRemHost(pNew, &addr));
 
 	/* set the new socket to non-blocking IO -TODO:do we really need to do this here? Do we always want it? */
 	if((sockflags = fcntl(iNewSock, F_GETFL)) != -1) {
@@ -492,7 +451,9 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 #endif
 	           ) {
 			/* TODO: check if *we* bound the socket - else we *have* an error! */
-                        dbgprintf("error %d while binding tcp socket", errno);
+			char errStr[1024];
+			rs_strerror_r(errno, errStr, sizeof(errStr));
+                        dbgprintf("error %d while binding tcp socket: %s\n", errno, errStr);
                 	close(sock);
 			sock = -1;
                         continue;
@@ -504,7 +465,7 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 			 * to a fixed, reasonable, limit that should work. Only if
 			 * that fails, too, we give up.
 			 */
-			dbgprintf("listen with a backlog of %d failed - retrying with default of 32.",
+			dbgprintf("listen with a backlog of %d failed - retrying with default of 32.\n",
 				   iSessMax / 10 + 5);
 			if(listen(sock, 32) < 0) {
 				dbgprintf("tcp listen error %d, suspending\n", errno);
@@ -537,7 +498,7 @@ LstnInit(netstrms_t *pNS, void *pUsr, rsRetVal(*fAddLstn)(void*,netstrm_t*),
 		 	  "- this may or may not be an error indication.\n", numSocks, maxs);
 
         if(numSocks == 0) {
-		dbgprintf("No TCP listen sockets could successfully be initialized");
+		dbgprintf("No TCP listen sockets could successfully be initialized\n");
 		ABORT_FINALIZE(RS_RET_COULD_NOT_BIND);
 	}
 
@@ -726,9 +687,10 @@ finalize_it:
  * http://blog.gerhards.net/2008/06/getting-bit-more-reliability-from-plain.html
  * rgerhards, 2008-06-09
  */
-static void
+static rsRetVal
 CheckConnection(nsd_t *pNsd)
 {
+	DEFiRet;
 	int rc;
 	char msgbuf[1]; /* dummy */
 	nsd_ptcp_t *pThis = (nsd_ptcp_t*) pNsd;
@@ -741,25 +703,23 @@ CheckConnection(nsd_t *pNsd)
 		 * need to close our side, too.
 		 */
 		sockClose(&pThis->sock);
+		ABORT_FINALIZE(RS_RET_IO_ERROR);
 	}
+finalize_it:
+	RETiRet;
 }
 
 
-/* get the remote host's IP address. The returned string must be freed by the
- * caller.
- * rgerhards, 2008-04-24
+/* get the remote host's IP address. Caller must Destruct the object.
  */
 static rsRetVal
-GetRemoteIP(nsd_t *pNsd, uchar **ppszIP)
+GetRemoteIP(nsd_t *pNsd, prop_t **ip)
 {
 	DEFiRet;
 	nsd_ptcp_t *pThis = (nsd_ptcp_t*) pNsd;
 	ISOBJ_TYPE_assert(pThis, nsd_ptcp);
-	assert(ppszIP != NULL);
-
-	CHKmalloc(*ppszIP = (uchar*)strdup(pThis->pRemHostIP == NULL ? "" : (char*) pThis->pRemHostIP));
-
-finalize_it:
+	prop.AddRef(pThis->remoteIP);
+	*ip = pThis->remoteIP;
 	RETiRet;
 }
 
@@ -805,6 +765,7 @@ CODESTARTObjClassExit(nsd_ptcp)
 	/* release objects we no longer need */
 	objRelease(net, CORE_COMPONENT);
 	objRelease(glbl, CORE_COMPONENT);
+	objRelease(prop, CORE_COMPONENT);
 	objRelease(errmsg, CORE_COMPONENT);
 	objRelease(netstrm, DONT_LOAD_LIB);
 	objRelease(netstrms, LM_NETSTRMS_FILENAME);
@@ -819,6 +780,7 @@ BEGINObjClassInit(nsd_ptcp, 1, OBJ_IS_LOADABLE_MODULE) /* class, version */
 	/* request objects we use */
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
 	CHKiRet(objUse(glbl, CORE_COMPONENT));
+	CHKiRet(objUse(prop, CORE_COMPONENT));
 	CHKiRet(objUse(net, CORE_COMPONENT));
 	CHKiRet(objUse(netstrms, LM_NETSTRMS_FILENAME));
 	CHKiRet(objUse(netstrm, DONT_LOAD_LIB));
