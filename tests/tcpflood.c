@@ -6,7 +6,12 @@
  * -p	target port (default 13514)
  * -n	number of target ports (targets are in range -p..(-p+-n-1)
  *      Note -c must also be set to at LEAST the number of -n!
- * -c	number of connections (default 1)
+ * -c	number of connections (default 1), use negative number
+ *      to set a "soft limit": if tcpflood cannot open the 
+ *      requested number of connections, gracefully degrade to
+ *      whatever number could be opened. This is useful in environments
+ *      where system config constraints cannot be overriden (e.g.
+ *      vservers, non-admin users, ...)
  * -m	number of messages to send (connection is random)
  * -i	initial message number (optional)
  * -P	PRI to be used for generated messages (default is 167).
@@ -48,13 +53,15 @@
  * -b   number of messages within a batch (default: 100,000,000 millions)
  * -Y	use multiple threads, one per connection (which means 1 if one only connection
  *  	is configured!)
+ * -y   use RFC5424 style test message
  * -z	private key file for TLS mode
  * -Z	cert (public key) file for TLS mode
  * -L	loglevel to use for GnuTLS troubleshooting (0-off to 10-all, 0 default)
+ * -j	format message in json, parameter is JSON cookie
  *
  * Part of the testbench for rsyslog.
  *
- * Copyright 2009, 2010 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009, 2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -91,8 +98,10 @@
 #include <errno.h>
 #ifdef ENABLE_GNUTLS
 #	include <gnutls/gnutls.h>
-#	include <gcrypt.h>
+#	if GNUTLS_VERSION_NUMBER <= 0x020b00
+#		include <gcrypt.h>
 	GCRY_THREAD_OPTION_PTHREAD_IMPL;
+#	endif
 #endif
 
 #define EXIT_FAILURE 1
@@ -109,9 +118,11 @@ static int targetPort = 13514;
 static int numTargetPorts = 1;
 static int dynFileIDs = 0;
 static int extraDataLen = 0; /* amount of extra data to add to message */
+static int useRFC5424Format = 0; /* should the test message be in RFC5424 format? */
 static int bRandomizeExtraData = 0; /* randomize amount of extra data added */
 static int numMsgsToSend; /* number of messages to send */
-static unsigned numConnections = 1; /* number of connections to create */
+static int numConnections = 1; /* number of connections to create */
+static int softLimitConnections  = 0; /* soft connection limit, see -c option description */
 static int *sockArray;  /* array of sockets to use */
 static int msgNum = 0;	/* initial message number to start with */
 static int bShowProgress = 1; /* show progress messages */
@@ -135,6 +146,7 @@ static int numThrds = 1;	/* number of threads to use */
 static char *tlsCertFile = NULL;
 static char *tlsKeyFile = NULL;
 static int tlsLogLevel = 0;
+static char *jsonCookie = NULL; /* if non-NULL, use JSON format with this cookie */
 
 #ifdef ENABLE_GNUTLS
 static gnutls_session_t *sessArray;	/* array of TLS sessions to use */
@@ -206,7 +218,7 @@ int openConn(int *fd)
 	int rnd;
 
 	if((sock=socket(AF_INET, SOCK_STREAM, 0))==-1) {
-		perror("socket()");
+		perror("\nsocket()");
 		return(1);
 	}
 
@@ -248,7 +260,7 @@ int openConn(int *fd)
  */
 int openConnections(void)
 {
-	unsigned i;
+	int i;
 	char msgBuf[128];
 	size_t lenMsg;
 
@@ -256,7 +268,7 @@ int openConnections(void)
 		return setupUDP();
 
 	if(bShowProgress)
-		write(1, "      open connections", sizeof("      open connections")-1);
+		if(write(1, "      open connections", sizeof("      open connections")-1)){}
 #	ifdef ENABLE_GNUTLS
 	sessArray = calloc(numConnections, sizeof(gnutls_session_t));
 #	endif
@@ -268,6 +280,12 @@ int openConnections(void)
 		}
 		if(openConn(&(sockArray[i])) != 0) {
 			printf("error in trying to open connection i=%d\n", i);
+			if(softLimitConnections) {
+				numConnections = i - 1;
+				printf("Connection limit is soft, continuing with only %d "
+				       "connections.\n", numConnections);
+				break;
+			}
 			return 1;
 		}
 		if(transport == TP_TLS) {
@@ -276,7 +294,7 @@ int openConnections(void)
 	}
 	if(bShowProgress) {
 		lenMsg = sprintf(msgBuf, "\r%5.5d open connections\n", i);
-		write(1, msgBuf, lenMsg);
+		if(write(1, msgBuf, lenMsg)) {}
 	}
 
 	return 0;
@@ -292,7 +310,7 @@ int openConnections(void)
  */
 void closeConnections(void)
 {
-	unsigned i;
+	int i;
 	size_t lenMsg;
 	struct linger ling;
 	char msgBuf[128];
@@ -301,12 +319,12 @@ void closeConnections(void)
 		return;
 
 	if(bShowProgress)
-		write(1, "      close connections", sizeof("      close connections")-1);
+		if(write(1, "      close connections", sizeof("      close connections")-1)){}
 	for(i = 0 ; i < numConnections ; ++i) {
 		if(i % 10 == 0) {
 			if(bShowProgress) {
 				lenMsg = sprintf(msgBuf, "\r%5.5d", i);
-				write(1, msgBuf, lenMsg);
+				if(write(1, msgBuf, lenMsg)){}
 			}
 		}
 		if(sockArray[i] != -1) {
@@ -323,7 +341,7 @@ void closeConnections(void)
 	}
 	if(bShowProgress) {
 		lenMsg = sprintf(msgBuf, "\r%5.5d close connections\n", i);
-		write(1, msgBuf, lenMsg);
+		if(write(1, msgBuf, lenMsg)){}
 	}
 
 }
@@ -345,8 +363,8 @@ genMsg(char *buf, size_t maxBuf, int *pLenBuf, struct instdata *inst)
 		/* get message from file */
 		do {
 			done = 1;
-			*pLenBuf = fread(buf, 1, 1024, dataFP);
-			if(feof(dataFP)) {
+			*pLenBuf = fread(buf, 1, MAX_EXTRADATA_LEN + 1024, dataFP);
+			if(*pLenBuf == 0) {
 				if(--numFileIterations > 0)  {
 					rewind(dataFP);
 					done = 0; /* need new iteration */
@@ -356,13 +374,28 @@ genMsg(char *buf, size_t maxBuf, int *pLenBuf, struct instdata *inst)
 				}
 			}
 		} while(!done); /* Attention: do..while()! */
+	} else if(jsonCookie != NULL) {
+		if(useRFC5424Format) {
+			*pLenBuf = snprintf(buf, maxBuf, "<%s>1 2003-03-01T01:00:00.000Z mymachine.example.com tcpflood "
+					     "- tag [tcpflood@32473 MSGNUM=\"%8.8d\"] %s{\"msgnum\":%d}%c",
+					       msgPRI, msgNum, jsonCookie, msgNum, frameDelim);
+		} else {
+			*pLenBuf = snprintf(buf, maxBuf, "<%s>Mar  1 01:00:00 172.20.245.8 tag %s{\"msgnum\":%d}%c",
+					       msgPRI, jsonCookie, msgNum, frameDelim);
+		}
 	} else if(MsgToSend == NULL) {
 		if(dynFileIDs > 0) {
-			snprintf(dynFileIDBuf, maxBuf, "%d:", rand() % dynFileIDs);
+			snprintf(dynFileIDBuf, sizeof(dynFileIDBuf), "%d:", rand() % dynFileIDs);
 		}
 		if(extraDataLen == 0) {
-			*pLenBuf = snprintf(buf, maxBuf, "<%s>Mar  1 01:00:00 172.20.245.8 tag msgnum:%s%8.8d:%c",
-					       msgPRI, dynFileIDBuf, msgNum, frameDelim);
+			if(useRFC5424Format) {
+				*pLenBuf = snprintf(buf, maxBuf, "<%s>1 2003-03-01T01:00:00.000Z mymachine.example.com tcpflood "
+						     "- tag [tcpflood@32473 MSGNUM=\"%8.8d\"] msgnum:%s%8.8d:%c",
+						       msgPRI, msgNum, dynFileIDBuf, msgNum, frameDelim);
+			} else {
+				*pLenBuf = snprintf(buf, maxBuf, "<%s>Mar  1 01:00:00 172.20.245.8 tag msgnum:%s%8.8d:%c",
+						       msgPRI, dynFileIDBuf, msgNum, frameDelim);
+			}
 		} else {
 			if(bRandomizeExtraData)
 				edLen = ((long) rand() + extraDataLen) % extraDataLen + 1;
@@ -370,8 +403,14 @@ genMsg(char *buf, size_t maxBuf, int *pLenBuf, struct instdata *inst)
 				edLen = extraDataLen;
 			memset(extraData, 'X', edLen);
 			extraData[edLen] = '\0';
-			*pLenBuf = snprintf(buf, maxBuf, "<%s>Mar  1 01:00:00 172.20.245.8 tag msgnum:%s%8.8d:%d:%s%c",
-					       msgPRI, dynFileIDBuf, msgNum, edLen, extraData, frameDelim);
+			if(useRFC5424Format) {
+				*pLenBuf = snprintf(buf, maxBuf, "<%s>1 2003-03-01T01:00:00.000Z mymachine.example.com tcpflood "
+						     "- tag [tcpflood@32473 MSGNUM=\"%8.8d\"] msgnum:%s%8.8d:%c",
+						       msgPRI, msgNum, dynFileIDBuf, msgNum, frameDelim);
+			} else {
+				*pLenBuf = snprintf(buf, maxBuf, "<%s>Mar  1 01:00:00 172.20.245.8 tag msgnum:%s%8.8d:%d:%s%c",
+						       msgPRI, dynFileIDBuf, msgNum, edLen, extraData, frameDelim);
+			}
 		}
 	} else {
 		/* use fixed message format from command line */
@@ -417,7 +456,7 @@ int sendMessages(struct instdata *inst)
 		if(runMultithreaded) {
 			socknum = inst->idx;
 		} else {
-			if(i < numConnections)
+			if((int) i < numConnections)
 				socknum = i;
 			else if(i >= inst->numMsgs - numConnections) {
 				socknum = i - (inst->numMsgs - numConnections);
@@ -427,6 +466,8 @@ int sendMessages(struct instdata *inst)
 			}
 		}
 		genMsg(buf, sizeof(buf), &lenBuf, inst); /* generate the message to send according to params */
+		if(lenBuf == 0)
+			break;	/* terminate when no message could be generated */
 		if(transport == TP_TCP) {
 			if(sockArray[socknum] == -1) {
 				/* connection was dropped, need to re-establish */
@@ -660,7 +701,7 @@ runTests(void)
 	int run;
 
 	stats.totalRuntime = 0;
-	stats.minRuntime = (unsigned long long) 0xffffffffffffffffll;
+	stats.minRuntime = 0xffffffffllu;
 	stats.maxRuntime = 0;
 	stats.numRuns = numRuns;
 	run = 1;
@@ -707,7 +748,9 @@ initTLS(void)
 	int r;
 
 	/* order of gcry_control and gnutls_global_init matters! */
+	#if GNUTLS_VERSION_NUMBER <= 0x020b00
 	gcry_control(GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
+	#endif
 	gnutls_global_init();
 	/* set debug mode, if so required by the options */
 	if(tlsLogLevel > 0) {
@@ -824,7 +867,7 @@ int main(int argc, char *argv[])
 
 	setvbuf(stdout, buf, _IONBF, 48);
 	
-	while((opt = getopt(argc, argv, "b:ef:F:t:p:c:C:m:i:I:P:d:Dn:L:M:rsBR:S:T:XW:Yz:Z:")) != -1) {
+	while((opt = getopt(argc, argv, "b:ef:F:t:p:c:C:m:i:I:P:d:Dn:L:M:rsBR:S:T:XW:yYz:Z:j:")) != -1) {
 		switch (opt) {
 		case 'b':	batchsize = atoll(optarg);
 				break;
@@ -834,7 +877,11 @@ int main(int argc, char *argv[])
 				break;
 		case 'n':	numTargetPorts = atoi(optarg);
 				break;
-		case 'c':	numConnections = (unsigned) atoi(optarg);
+		case 'c':	numConnections = atoi(optarg);
+				if(numConnections < 0) {
+					numConnections *= -1;
+					softLimitConnections = 1;
+				}
 				break;
 		case 'C':	numFileIterations = atoi(optarg);
 				break;
@@ -843,6 +890,8 @@ int main(int argc, char *argv[])
 		case 'i':	msgNum = atoi(optarg);
 				break;
 		case 'P':	msgPRI = optarg;
+				break;
+		case 'j':	jsonCookie = optarg;
 				break;
 		case 'd':	extraDataLen = atoi(optarg);
 				if(extraDataLen > MAX_EXTRADATA_LEN) {
@@ -901,6 +950,8 @@ int main(int argc, char *argv[])
 		case 'W':	waittime = atoi(optarg);
 				break;
 		case 'Y':	runMultithreaded = 1;
+				break;
+		case 'y':	useRFC5424Format = 1;
 				break;
 		case 'z':	tlsKeyFile = optarg;
 				break;

@@ -47,6 +47,7 @@
 #include "msg.h"
 #include "datetime.h"
 #include "prop.h"
+#include "ratelimit.h"
 #include "debug.h"
 
 
@@ -57,8 +58,6 @@ DEFobjCurrIf(errmsg)
 DEFobjCurrIf(netstrm)
 DEFobjCurrIf(prop)
 DEFobjCurrIf(datetime)
-
-static int iMaxLine; /* maximum size of a single message */
 
 
 /* forward definitions */
@@ -71,7 +70,7 @@ BEGINobjConstruct(tcps_sess) /* be sure to specify the object type also in END m
 		pThis->bAtStrtOfFram = 1; /* indicate frame header expected */
 		pThis->eFraming = TCP_FRAMING_OCTET_STUFFING; /* just make sure... */
 		/* now allocate the message reception buffer */
-		CHKmalloc(pThis->pMsg = (uchar*) MALLOC(sizeof(uchar) * iMaxLine + 1));
+		CHKmalloc(pThis->pMsg = (uchar*) MALLOC(sizeof(uchar) * glbl.GetMaxLine() + 1));
 finalize_it:
 ENDobjConstruct(tcps_sess)
 
@@ -95,6 +94,7 @@ finalize_it:
 /* destructor for the tcps_sess object */
 BEGINobjDestruct(tcps_sess) /* be sure to specify the object type also in END and CODESTART macros! */
 CODESTARTobjDestruct(tcps_sess)
+//printf("sess %p destruct, pStrm %p\n", pThis, pThis->pStrm);
 	if(pThis->pStrm != NULL)
 		netstrm.Destruct(&pThis->pStrm);
 
@@ -138,24 +138,20 @@ finalize_it:
 	RETiRet;
 }
 
-/* set the remote host's IP. Note that the caller *hands over* the string. That is,
+/* set the remote host's IP. Note that the caller *hands over* the property. That is,
  * the caller no longer controls it once SetHostIP() has received it. Most importantly,
- * the caller must not free it. -- rgerhards, 2008-05-16
+ * the caller must not destruct it. -- rgerhards, 2008-05-16
  */
 static rsRetVal
-SetHostIP(tcps_sess_t *pThis, uchar *pszHostIP)
+SetHostIP(tcps_sess_t *pThis, prop_t *ip)
 {
 	DEFiRet;
-
 	ISOBJ_TYPE_assert(pThis, tcps_sess);
 
-	if(pThis->fromHostIP == NULL)
-		CHKiRet(prop.Construct(&pThis->fromHostIP));
-
-	CHKiRet(prop.SetString(pThis->fromHostIP, pszHostIP, ustrlen(pszHostIP)));
-
-finalize_it:
-	free(pszHostIP);
+	if(pThis->fromHostIP != NULL) {
+		prop.Destruct(&pThis->fromHostIP);
+	}
+	pThis->fromHostIP = ip;
 	RETiRet;
 }
 
@@ -199,6 +195,8 @@ SetLstnInfo(tcps_sess_t *pThis, tcpLstnPortList_t *pLstnInfo)
 	ISOBJ_TYPE_assert(pThis, tcps_sess);
 	assert(pLstnInfo != NULL);
 	pThis->pLstnInfo = pLstnInfo;
+	/* set cached elements */
+	pThis->bSuppOctetFram = pLstnInfo->bSuppOctetFram;
 	RETiRet;
 }
 
@@ -253,20 +251,17 @@ defaultDoSubmitMessage(tcps_sess_t *pThis, struct syslogTime *stTime, time_t ttG
 	CHKiRet(msgConstructWithTime(&pMsg, stTime, ttGenTime));
 	MsgSetRawMsg(pMsg, (char*)pThis->pMsg, pThis->iMsg);
 	MsgSetInputName(pMsg, pThis->pLstnInfo->pInputName);
-	MsgSetFlowControlType(pMsg, eFLOWCTL_LIGHT_DELAY);
+	if(pThis->pLstnInfo->dfltTZ != NULL)
+		MsgSetDfltTZ(pMsg, (char*) pThis->pLstnInfo->dfltTZ);
+	MsgSetFlowControlType(pMsg, pThis->pSrv->bUseFlowControl
+			            ? eFLOWCTL_LIGHT_DELAY : eFLOWCTL_NO_DELAY);
 	pMsg->msgFlags  = NEEDS_PARSING | PARSE_HOSTNAME;
 	MsgSetRcvFrom(pMsg, pThis->fromHost);
 	CHKiRet(MsgSetRcvFromIP(pMsg, pThis->fromHostIP));
 	MsgSetRuleset(pMsg, pThis->pLstnInfo->pRuleset);
 
-	if(pMultiSub == NULL) {
-		CHKiRet(submitMsg(pMsg));
-	} else {
-		pMultiSub->ppMsgs[pMultiSub->nElem++] = pMsg;
-		if(pMultiSub->nElem == pMultiSub->maxElem)
-			CHKiRet(multiSubmitMsg(pMultiSub));
-	}
-
+	STATSCOUNTER_INC(pThis->pLstnInfo->ctrSubmit, pThis->pLstnInfo->mutCtrSubmit);
+	ratelimitAddMsg(pThis->pLstnInfo->ratelimiter, pMultiSub, pMsg);
 
 finalize_it:
 	/* reset status variables */
@@ -312,13 +307,13 @@ PrepareClose(tcps_sess_t *pThis)
 		 * generate an error message and discard the frame.
 		 */
 		errmsg.LogError(0, NO_ERRCODE, "Incomplete frame at end of stream in session %p - "
-			    "ignoring extra data (a message may be lost).\n", pThis->pStrm);
+			    "ignoring extra data (a message may be lost).", pThis->pStrm);
 		/* nothing more to do */
 	} else { /* here, we have traditional framing. Missing LF at the end
 		 * of message may occur. As such, we process the message in
 		 * this case.
 		 */
-		dbgprintf("Extra data at end of stream in legacy syslog/tcp message - processing\n");
+		DBGPRINTF("Extra data at end of stream in legacy syslog/tcp message - processing\n");
 		datetime.getCurrTime(&stTime, &ttGenTime);
 		defaultDoSubmitMessage(pThis, &stTime, ttGenTime, NULL);
 	}
@@ -337,6 +332,7 @@ Close(tcps_sess_t *pThis)
 {
 	DEFiRet;
 
+//printf("sess %p close\n", pThis);
 	ISOBJ_TYPE_assert(pThis, tcps_sess);
 	netstrm.Destruct(&pThis->pStrm);
 	if(pThis->fromHost != NULL) {
@@ -360,9 +356,10 @@ processDataRcvd(tcps_sess_t *pThis, char c, struct syslogTime *stTime, time_t tt
 {
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, tcps_sess);
+	int iMaxLine = glbl.GetMaxLine();
 
 	if(pThis->inputState == eAtStrtFram) {
-		if(isdigit((int) c)) {
+		if(pThis->bSuppOctetFram && c >= '0' && c <= '9') {
 			pThis->inputState = eInOctetCnt;
 			pThis->iOctetsRemain = 0;
 			pThis->eFraming = TCP_FRAMING_OCTET_COUNTING;
@@ -373,27 +370,27 @@ processDataRcvd(tcps_sess_t *pThis, char c, struct syslogTime *stTime, time_t tt
 	}
 
 	if(pThis->inputState == eInOctetCnt) {
-		if(isdigit(c)) {
+		if(c >= '0' && c <= '9') { /* isdigit() the faster way */
 			pThis->iOctetsRemain = pThis->iOctetsRemain * 10 + c - '0';
 		} else { /* done with the octet count, so this must be the SP terminator */
-			dbgprintf("TCP Message with octet-counter, size %d.\n", pThis->iOctetsRemain);
+			DBGPRINTF("TCP Message with octet-counter, size %d.\n", pThis->iOctetsRemain);
 			if(c != ' ') {
 				errmsg.LogError(0, NO_ERRCODE, "Framing Error in received TCP message: "
-					    "delimiter is not SP but has ASCII value %d.\n", c);
+					    "delimiter is not SP but has ASCII value %d.", c);
 			}
 			if(pThis->iOctetsRemain < 1) {
 				/* TODO: handle the case where the octet count is 0! */
-				dbgprintf("Framing Error: invalid octet count\n");
+				DBGPRINTF("Framing Error: invalid octet count\n");
 				errmsg.LogError(0, NO_ERRCODE, "Framing Error in received TCP message: "
-					    "invalid octet count %d.\n", pThis->iOctetsRemain);
+					    "invalid octet count %d.", pThis->iOctetsRemain);
 			} else if(pThis->iOctetsRemain > iMaxLine) {
 				/* while we can not do anything against it, we can at least log an indication
 				 * that something went wrong) -- rgerhards, 2008-03-14
 				 */
-				dbgprintf("truncating message with %d octets - max msg size is %d\n",
+				DBGPRINTF("truncating message with %d octets - max msg size is %d\n",
 					  pThis->iOctetsRemain, iMaxLine);
 				errmsg.LogError(0, NO_ERRCODE, "received oversize message: size is %d bytes, "
-					        "max msg size is %d, truncating...\n", pThis->iOctetsRemain, iMaxLine);
+					        "max msg size is %d, truncating...", pThis->iOctetsRemain, iMaxLine);
 			}
 			pThis->inputState = eInMsg;
 		}
@@ -401,7 +398,7 @@ processDataRcvd(tcps_sess_t *pThis, char c, struct syslogTime *stTime, time_t tt
 		assert(pThis->inputState == eInMsg);
 		if(pThis->iMsg >= iMaxLine) {
 			/* emergency, we now need to flush, no matter if we are at end of message or not... */
-			dbgprintf("error: message received is larger than max msg size, we split it\n");
+			DBGPRINTF("error: message received is larger than max msg size, we split it\n");
 			defaultDoSubmitMessage(pThis, stTime, ttGenTime, pMultiSub);
 			/* we might think if it is better to ignore the rest of the
 			 * message than to treat it as a new one. Maybe this is a good
@@ -481,11 +478,7 @@ DataRcvd(tcps_sess_t *pThis, char *pData, size_t iLen)
 	while(pData < pEnd) {
 		CHKiRet(processDataRcvd(pThis, *pData++, &stTime, ttGenTime, &multiSub));
 	}
-
-	if(multiSub.nElem > 0) {
-		/* submit anything that was not yet submitted */
-		CHKiRet(multiSubmitMsg(&multiSub));
-	}
+	iRet = multiSubmitFlush(&multiSub);
 
 finalize_it:
 	RETiRet;
@@ -553,7 +546,6 @@ BEGINObjClassInit(tcps_sess, 1, OBJ_IS_CORE_MODULE) /* class, version - CHANGE c
 	CHKiRet(objUse(prop, CORE_COMPONENT));
 
 	CHKiRet(objUse(glbl, CORE_COMPONENT));
-	iMaxLine = glbl.GetMaxLine(); /* get maximum size we currently support */
 	objRelease(glbl, CORE_COMPONENT);
 
 	/* set our own handlers */

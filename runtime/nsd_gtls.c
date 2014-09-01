@@ -2,7 +2,7 @@
  *
  * An implementation of the nsd interface for GnuTLS.
  * 
- * Copyright (C) 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright (C) 2007-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -29,7 +29,9 @@
 #include <string.h>
 #include <gnutls/gnutls.h>
 #include <gnutls/x509.h>
-#include <gcrypt.h>
+#if GNUTLS_VERSION_NUMBER <= 0x020b00
+#	include <gcrypt.h>
+#endif
 #include <errno.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -48,13 +50,15 @@
 #include "nsd_ptcp.h"
 #include "nsdsel_gtls.h"
 #include "nsd_gtls.h"
+#include "unicode-helper.h"
 
 /* things to move to some better place/functionality - TODO */
-#define DH_BITS 1024
 #define CRLFILE "crl.pem"
 
 
+#if GNUTLS_VERSION_NUMBER <= 0x020b00
 GCRY_THREAD_OPTION_PTHREAD_IMPL;
+#endif
 MODULE_TYPE_LIB
 MODULE_TYPE_KEEP
 
@@ -82,7 +86,6 @@ static pthread_mutex_t mutGtlsStrerror; /**< a mutex protecting the potentially 
 
 /* ------------------------------ GnuTLS specifics ------------------------------ */
 static gnutls_certificate_credentials xcred;
-static gnutls_dh_params dh_params;
 
 #ifdef DEBUG
 #if 0 /* uncomment, if needed some time again -- DEV Debug only */
@@ -118,14 +121,13 @@ readFile(uchar *pszFile, gnutls_datum_t *pBuf)
 	if((fd = open((char*)pszFile, O_RDONLY)) == -1) {
 		errmsg.LogError(0, RS_RET_FILE_NOT_FOUND, "can not read file '%s'", pszFile);
 		ABORT_FINALIZE(RS_RET_FILE_NOT_FOUND);
-
 	}
 
 	if(fstat(fd, &stat_st) == -1) {
 		errmsg.LogError(0, RS_RET_FILE_NO_STAT, "can not stat file '%s'", pszFile);
 		ABORT_FINALIZE(RS_RET_FILE_NO_STAT);
 	}
-	
+
 	/* 1MB limit */
 	if(stat_st.st_size > 1024 * 1024) {
 		errmsg.LogError(0, RS_RET_FILE_TOO_LARGE, "file '%s' too large, max 1MB", pszFile);
@@ -139,9 +141,9 @@ readFile(uchar *pszFile, gnutls_datum_t *pBuf)
 		ABORT_FINALIZE(RS_RET_IO_ERROR);
 	}
 
-	close(fd);
-
 finalize_it:
+	if(fd != -1)
+		close(fd);
 	if(iRet != RS_RET_OK) {
 		if(pBuf->data != NULL) {
 			free(pBuf->data);
@@ -257,9 +259,9 @@ gtlsClientCertCallback(gnutls_session session,
 static rsRetVal
 gtlsGetCertInfo(nsd_gtls_t *pThis, cstr_t **ppStr)
 {
-	char dn[128];
-	uchar lnBuf[256];
-	size_t size;
+	uchar szBufA[1024];
+	uchar *szBuf = szBufA;
+	size_t szBufLen = sizeof(szBufA), tmp;
 	unsigned int algo, bits;
 	time_t expiration_time, activation_time;
 	const gnutls_datum *cert_list;
@@ -269,8 +271,6 @@ gtlsGetCertInfo(nsd_gtls_t *pThis, cstr_t **ppStr)
 	int gnuRet;
 	DEFiRet;
 	unsigned iAltName;
-	size_t szAltNameLen;
-	char szAltName[1024]; /* this is sufficient for the DNSNAME... */
 
 	assert(ppStr != NULL);
 	ISOBJ_TYPE_assert(pThis, nsd_gtls);
@@ -279,61 +279,62 @@ gtlsGetCertInfo(nsd_gtls_t *pThis, cstr_t **ppStr)
 		return RS_RET_TLS_CERT_ERR;
 
 	cert_list = gnutls_certificate_get_peers(pThis->sess, &cert_list_size);
-
-	CHKiRet(rsCStrConstruct(&pStr));
-
-	snprintf((char*)lnBuf, sizeof(lnBuf), "peer provided %d certificate(s). ", cert_list_size);
-	CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+	CHKiRet(rsCStrConstructFromszStrf(&pStr, "peer provided %d certificate(s). ", cert_list_size));
 
 	if(cert_list_size > 0) {
 		/* we only print information about the first certificate */
 		CHKgnutls(gnutls_x509_crt_init(&cert));
 		CHKgnutls(gnutls_x509_crt_import(cert, &cert_list[0], GNUTLS_X509_FMT_DER));
 
-		CHKiRet(rsCStrAppendStr(pStr, (uchar*)"Certificate 1 info: "));
-
 		expiration_time = gnutls_x509_crt_get_expiration_time(cert);
 		activation_time = gnutls_x509_crt_get_activation_time(cert);
-		ctime_r(&activation_time, dn);
-		dn[strlen(dn) - 1] = '\0'; /* strip linefeed */
-		snprintf((char*)lnBuf, sizeof(lnBuf), "certificate valid from %s ", dn);
-		CHKiRet(rsCStrAppendStr(pStr, lnBuf));
-
-		ctime_r(&expiration_time, dn);
-		dn[strlen(dn) - 1] = '\0'; /* strip linefeed */
-		snprintf((char*)lnBuf, sizeof(lnBuf), "to %s; ", dn);
-		CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+		ctime_r(&activation_time, (char*)szBuf);
+		szBuf[ustrlen(szBuf) - 1] = '\0'; /* strip linefeed */
+		CHKiRet(rsCStrAppendStrf(pStr, "Certificate 1 info: "
+			"certificate valid from %s ", szBuf));
+		ctime_r(&expiration_time, (char*)szBuf);
+		szBuf[ustrlen(szBuf) - 1] = '\0'; /* strip linefeed */
+		CHKiRet(rsCStrAppendStrf(pStr, "to %s; ", szBuf));
 
 		/* Extract some of the public key algorithm's parameters */
 		algo = gnutls_x509_crt_get_pk_algorithm(cert, &bits);
-
-		snprintf((char*)lnBuf, sizeof(lnBuf), "Certificate public key: %s; ",
-			 gnutls_pk_algorithm_get_name(algo));
-		CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+		CHKiRet(rsCStrAppendStrf(pStr, "Certificate public key: %s; ",
+			gnutls_pk_algorithm_get_name(algo)));
 
 		/* names */
-		size = sizeof(dn);
-		gnutls_x509_crt_get_dn(cert, dn, &size);
-		snprintf((char*)lnBuf, sizeof(lnBuf), "DN: %s; ", dn);
-		CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+		tmp = szBufLen;
+		if(gnutls_x509_crt_get_dn(cert, (char*)szBuf, &tmp)
+		    == GNUTLS_E_SHORT_MEMORY_BUFFER) {
+			szBufLen = tmp;
+			szBuf = malloc(tmp);
+			gnutls_x509_crt_get_dn(cert, (char*)szBuf, &tmp);
+		}
+		CHKiRet(rsCStrAppendStrf(pStr, "DN: %s; ", szBuf));
 
-		size = sizeof(dn);
-		gnutls_x509_crt_get_issuer_dn(cert, dn, &size);
-		snprintf((char*)lnBuf, sizeof(lnBuf), "Issuer DN: %s; ", dn);
-		CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+		tmp = szBufLen;
+		if(gnutls_x509_crt_get_issuer_dn(cert, (char*)szBuf, &tmp)
+		    == GNUTLS_E_SHORT_MEMORY_BUFFER) {
+			szBufLen = tmp;
+			szBuf = realloc((szBuf == szBufA) ? NULL : szBuf, tmp);
+			gnutls_x509_crt_get_issuer_dn(cert, (char*)szBuf, &tmp);
+		}
+		CHKiRet(rsCStrAppendStrf(pStr, "Issuer DN: %s; ", szBuf));
 
 		/* dNSName alt name */
 		iAltName = 0;
 		while(1) { /* loop broken below */
-			szAltNameLen = sizeof(szAltName);
+			tmp = szBufLen;
 			gnuRet = gnutls_x509_crt_get_subject_alt_name(cert, iAltName,
-					szAltName, &szAltNameLen, NULL);
-			if(gnuRet < 0)
+					szBuf, &tmp, NULL);
+			if(gnuRet == GNUTLS_E_SHORT_MEMORY_BUFFER) {
+				szBufLen = tmp;
+				szBuf = realloc((szBuf == szBufA) ? NULL : szBuf, tmp);
+				continue;
+			} else if(gnuRet < 0)
 				break;
 			else if(gnuRet == GNUTLS_SAN_DNSNAME) {
 				/* we found it! */
-				snprintf((char*)lnBuf, sizeof(lnBuf), "SAN:DNSname: %s; ", szAltName);
-				CHKiRet(rsCStrAppendStr(pStr, lnBuf));
+				CHKiRet(rsCStrAppendStrf(pStr, "SAN:DNSname: %s; ", szBuf));
 				/* do NOT break, because there may be multiple dNSName's! */
 			}
 			++iAltName;
@@ -350,6 +351,8 @@ finalize_it:
 		if(pStr != NULL)
 			rsCStrDestruct(&pStr);
 	}
+	if(szBuf != szBufA)
+		free(szBuf);
 
 	RETiRet;
 }
@@ -544,10 +547,20 @@ gtlsAddOurCert(void)
 	keyFile = glbl.GetDfltNetstrmDrvrKeyFile();
 	dbgprintf("GTLS certificate file: '%s'\n", certFile);
 	dbgprintf("GTLS key file: '%s'\n", keyFile);
+	if(certFile == NULL) {
+		errmsg.LogError(0, RS_RET_CERT_MISSING, "error: certificate file is not set, cannot "
+				"continue");
+		ABORT_FINALIZE(RS_RET_CERT_MISSING);
+	}
+	if(keyFile == NULL) {
+		errmsg.LogError(0, RS_RET_CERTKEY_MISSING, "error: key file is not set, cannot "
+				"continue");
+		ABORT_FINALIZE(RS_RET_CERTKEY_MISSING);
+	}
 	CHKgnutls(gnutls_certificate_set_x509_key_file(xcred, (char*)certFile, (char*)keyFile, GNUTLS_X509_FMT_PEM));
 
 finalize_it:
-	if(iRet != RS_RET_OK) {
+	if(iRet != RS_RET_OK && iRet != RS_RET_CERT_MISSING && iRet != RS_RET_CERTKEY_MISSING) {
 		pGnuErr = gtlsStrerror(gnuRet);
 		errno = 0;
 		errmsg.LogError(0, iRet, "error adding our certificate. GnuTLS error %d, message: '%s', "
@@ -567,7 +580,9 @@ gtlsGlblInit(void)
 	DEFiRet;
 
 	/* gcry_control must be called first, so that the thread system is correctly set up */
+	#if GNUTLS_VERSION_NUMBER <= 0x020b00
 	gcry_control (GCRYCTL_SET_THREAD_CBS, &gcry_threads_pthread);
+	#endif
 	CHKgnutls(gnutls_global_init());
 	
 	/* X509 stuff */
@@ -575,6 +590,11 @@ gtlsGlblInit(void)
 
 	/* sets the trusted cas file */
 	cafile = glbl.GetDfltNetstrmDrvrCAF();
+	if(cafile == NULL) {
+		errmsg.LogError(0, RS_RET_CA_CERT_MISSING, "error: ca certificate is not set, cannot "
+				"continue");
+		ABORT_FINALIZE(RS_RET_CA_CERT_MISSING);
+	}
 	dbgprintf("GTLS CA file: '%s'\n", cafile);
 	gnuRet = gnutls_certificate_set_x509_trust_file(xcred, (char*)cafile, GNUTLS_X509_FMT_PEM);
 	if(gnuRet < 0) {
@@ -614,27 +634,9 @@ gtlsInitSession(nsd_gtls_t *pThis)
 
 	/* request client certificate if any.  */
 	gnutls_certificate_server_set_request( session, GNUTLS_CERT_REQUEST);
-	gnutls_dh_set_prime_bits(session, DH_BITS);
 
 	pThis->sess = session;
 
-finalize_it:
-	RETiRet;
-}
-
-
-static rsRetVal
-generate_dh_params(void)
-{
-	int gnuRet;
-	DEFiRet;
-	/* Generate Diffie Hellman parameters - for use with DHE
-	 * kx algorithms. These should be discarded and regenerated
-	 * once a day, once a week or once a month. Depending on the
-	 * security requirements.
-	 */
-	CHKgnutls(gnutls_dh_params_init( &dh_params));
-	CHKgnutls(gnutls_dh_params_generate2( dh_params, DH_BITS));
 finalize_it:
 	RETiRet;
 }
@@ -653,8 +655,6 @@ gtlsGlblInitLstn(void)
 		 * considered legacy. -- rgerhards, 2008-05-05
 		 */
 		/*CHKgnutls(gnutls_certificate_set_x509_crl_file(xcred, CRLFILE, GNUTLS_X509_FMT_PEM));*/
-		CHKiRet(generate_dh_params());
-		gnutls_certificate_set_dh_params(xcred, dh_params); /* this is void */
 		bGlblSrvrInitDone = 1; /* we are all set now */
 
 		/* now we need to add our certificate */
@@ -1332,13 +1332,16 @@ finalize_it:
  * This is a dummy here. For details, check function common in ptcp driver.
  * rgerhards, 2008-06-09
  */
-static void
+static rsRetVal
 CheckConnection(nsd_t __attribute__((unused)) *pNsd)
 {
+	DEFiRet;
 	nsd_gtls_t *pThis = (nsd_gtls_t*) pNsd;
 	ISOBJ_TYPE_assert(pThis, nsd_gtls);
 
-	nsd_ptcp.CheckConnection(pThis->pTcp);
+	CHKiRet(nsd_ptcp.CheckConnection(pThis->pTcp));
+finalize_it:
+	RETiRet;
 }
 
 
@@ -1370,16 +1373,14 @@ GetRemAddr(nsd_t *pNsd, struct sockaddr_storage **ppAddr)
 }
 
 
-/* get the remote host's IP address. The returned string must be freed by the
- * caller. -- rgerhards, 2008-04-25
- */
+/* get the remote host's IP address. Caller must Destruct the object. */
 static rsRetVal
-GetRemoteIP(nsd_t *pNsd, uchar **ppszIP)
+GetRemoteIP(nsd_t *pNsd, prop_t **ip)
 {
 	DEFiRet;
 	nsd_gtls_t *pThis = (nsd_gtls_t*) pNsd;
 	ISOBJ_TYPE_assert(pThis, nsd_gtls);
-	iRet = nsd_ptcp.GetRemoteIP(pThis->pTcp, ppszIP);
+	iRet = nsd_ptcp.GetRemoteIP(pThis->pTcp, ip);
 	RETiRet;
 }
 
@@ -1426,6 +1427,10 @@ AcceptConnReq(nsd_t *pNsd, nsd_t **ppNew)
 		/* we got a handshake, now check authorization */
 		CHKiRet(gtlsChkPeerAuth(pNew));
 	} else {
+		uchar *pGnuErr = gtlsStrerror(gnuRet);
+		errmsg.LogError(0, RS_RET_TLS_HANDSHAKE_ERR, 
+			"gnutls returned error on handshake: %s\n", pGnuErr);
+		free(pGnuErr);
 		ABORT_FINALIZE(RS_RET_TLS_HANDSHAKE_ERR);
 	}
 

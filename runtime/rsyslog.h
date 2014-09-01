@@ -3,7 +3,7 @@
  *
  * Begun 2005-09-15 RGerhards
  *
- * Copyright (C) 2005-2008 by Rainer Gerhards and Adiscon GmbH
+ * Copyright (C) 2005-2013 by Rainer Gerhards and Adiscon GmbH
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -46,8 +46,10 @@
 #define CONF_HOSTNAME_MAXSIZE		512	/* a value that is deemed far too large for any valid HOSTNAME */
 #define CONF_RAWMSG_BUFSIZE		101
 #define CONF_TAG_BUFSIZE		32
+#define CONF_PROGNAME_BUFSIZE		16
 #define CONF_HOSTNAME_BUFSIZE		32
 #define CONF_PROP_BUFSIZE		16	/* should be close to sizeof(ptr) or lighly above it */
+#define CONF_IPARAMS_BUFSIZE		16	/* initial size of iparams array in wti (is automatically extended) */
 #define	CONF_MIN_SIZE_FOR_COMPRESS	60 	/* config param: minimum message size to try compression. The smaller
 						 * the message, the less likely is any compression gain. We check for
 						 * gain before we submit the message. But to do so we still need to
@@ -60,15 +62,16 @@
 						 * rgerhards, 2006-11-30
 						 */
 
-#define CONF_OMOD_NUMSTRINGS_MAXSIZE	2	/* cache for pointers to output module buffer pointers. All
-						 * rsyslog-provided plugins do NOT need more than two buffers. If
-						 * more are needed (future developments, third-parties), rsyslog 
+#define CONF_OMOD_NUMSTRINGS_MAXSIZE	5	/* cache for pointers to output module buffer pointers. All
+						 * rsyslog-provided plugins do NOT need more than five buffers. If
+						 * more are needed (future developments, third-parties), rsyslog
 						 * must be recompiled with a larger parameter. Hardcoding this
 						 * saves us some overhead, both in runtime in code complexity. As
-						 * it is doubtful if ever more than 2 parameters are needed, the
+						 * it is doubtful if ever more than 3 parameters are needed, the
 						 * approach taken here is considered appropriate.
 						 * rgerhards, 2010-06-24
 						 */
+#define CONF_NUM_MULTISUB		1024	/* default number of messages per multisub structure */
 
 /* ############################################################# *
  * #                  End Config Settings                      # *
@@ -89,7 +92,7 @@
 
 
 /* the rsyslog core provides information about present feature to plugins
- * asking it. Below are feature-test macros which must be used to query 
+ * asking it. Below are feature-test macros which must be used to query
  * features. Note that this must be powers of two, so that multiple queries
  * can be combined. -- rgerhards, 2009-04-27
  */
@@ -100,45 +103,6 @@
 #define _PATH_CONSOLE	"/dev/console"
 #endif
 
-/* properties are now encoded as (tiny) integers. I do not use an enum as I would like
- * to keep the memory footprint small (and thus cache hits high).
- * rgerhards, 2009-06-26
- */
-typedef uintTiny	propid_t;
-#define PROP_INVALID			0
-#define PROP_MSG			1
-#define PROP_TIMESTAMP			2
-#define PROP_HOSTNAME			3
-#define PROP_SYSLOGTAG			4
-#define PROP_RAWMSG			5
-#define PROP_INPUTNAME			6
-#define PROP_FROMHOST			7
-#define PROP_FROMHOST_IP		8
-#define PROP_PRI			9
-#define PROP_PRI_TEXT			10
-#define PROP_IUT			11
-#define PROP_SYSLOGFACILITY		12
-#define PROP_SYSLOGFACILITY_TEXT	13
-#define PROP_SYSLOGSEVERITY		14
-#define PROP_SYSLOGSEVERITY_TEXT	15
-#define PROP_TIMEGENERATED		16
-#define PROP_PROGRAMNAME		17
-#define PROP_PROTOCOL_VERSION		18
-#define PROP_STRUCTURED_DATA		19
-#define PROP_APP_NAME			20
-#define PROP_PROCID			21
-#define PROP_MSGID			22
-#define PROP_SYS_NOW			150
-#define PROP_SYS_YEAR			151
-#define PROP_SYS_MONTH			152
-#define PROP_SYS_DAY			153
-#define PROP_SYS_HOUR			154
-#define PROP_SYS_HHOUR			155
-#define PROP_SYS_QHOUR			156
-#define PROP_SYS_MINUTE			157
-#define PROP_SYS_MYHOSTNAME		158
-#define PROP_SYS_BOM			159
-
 
 /* The error codes below are orginally "borrowed" from
  * liblogging. As such, we reserve values up to -2999
@@ -146,7 +110,7 @@ typedef uintTiny	propid_t;
 */
 enum rsRetVal_				/** return value. All methods return this if not specified otherwise */
 {
-	/* the first two define are for errmsg.logError(), so that we can use the rsRetVal 
+	/* the first two define are for errmsg.logError(), so that we can use the rsRetVal
 	 * as an rsyslog error code. -- rgerhards, 20080-06-27
 	 */
 	RS_RET_NO_ERRCODE = -1,		/**< RESERVED for NO_ERRCODE errmsg.logError status name */
@@ -317,7 +281,7 @@ enum rsRetVal_				/** return value. All methods return this if not specified oth
 	RS_RET_ERR_DOOR = -2147, /**< some problems with handling the Solaris door functionality */
 	RS_RET_NO_SRCNAME_TPL = -2150, /**< sourcename template was not specified where one was needed (omudpspoof spoof addr) */
 	RS_RET_HOST_NOT_SPECIFIED = -2151, /**< (target) host was not specified where it was needed */
-	RS_RET_ERR_LIBNET_INIT = -2152, /**< error initializing libnet */
+	RS_RET_ERR_LIBNET_INIT = -2152, /**< error initializing libnet, e.g. because not running as root */
 	RS_RET_FORCE_TERM = -2153,	/**< thread was forced to terminate by bShallShutdown, a state, not an error */
 	RS_RET_RULES_QUEUE_EXISTS = -2154,/**< we were instructed to create a new ruleset queue, but one already exists */
 	RS_RET_NO_CURR_RULESET = -2155,/**< no current ruleset exists (but one is required) */
@@ -332,6 +296,11 @@ enum rsRetVal_				/** return value. All methods return this if not specified oth
 	RS_RET_TIMEOUT = -2164,		/**< timeout occured during operation */
 	RS_RET_RCV_ERR = -2165,		/**< error occured during socket rcv operation */
 	RS_RET_NO_SOCK_CONFIGURED = -2166, /**< no socket (name) was configured where one is required */
+	RS_RET_CONF_NOT_GLBL = -2167,	/**< $Begin not in global scope */
+	RS_RET_CONF_IN_GLBL = -2168,	/**< $End when in global scope */
+	RS_RET_CONF_INVLD_END = -2169,	/**< $End for wrong conf object (probably nesting error) */
+	RS_RET_CONF_INVLD_SCOPE = -2170,/**< config statement not valid in current scope (e.g. global stmt in action block) */
+	RS_RET_CONF_END_NO_ACT = -2171,	/**< end of action block, but no actual action specified */
 	RS_RET_NO_LSTN_DEFINED = -2172, /**< no listener defined (e.g. inside an input module) */
 	RS_RET_EPOLL_CR_FAILED = -2173, /**< epoll_create() failed */
 	RS_RET_EPOLL_CTL_FAILED = -2174, /**< epoll_ctl() failed */
@@ -343,12 +312,90 @@ enum rsRetVal_				/** return value. All methods return this if not specified oth
 	RS_RET_FILE_NOT_SPECIFIED = -2180, /**< file name not configured where this was required */
 	RS_RET_ERR_WRKDIR = -2181, /**< problems with the rsyslog working directory */
 	RS_RET_WRN_WRKDIR = -2182, /**< correctable problems with the rsyslog working directory */
+	RS_RET_ERR_QUEUE_EMERGENCY = -2183, /**<  some fatal error caused queue to switch to emergency mode */
 	RS_RET_OUTDATED_STMT = -2184, /**<  some outdated statement/functionality is being used in conf file */
 	RS_RET_MISSING_WHITESPACE = -2185, /**<  whitespace is missing in some config construct */
+	RS_RET_OK_WARN = -2186, /**<  config part: everything was OK, but a warning message was emitted */
 
+	RS_RET_INVLD_CONF_OBJ= -2200,	/**< invalid config object (e.g. $Begin conf statement) */
+	RS_RET_ERR_LIBEE_INIT = -2201,	/**< cannot obtain libee ctx */
+	RS_RET_ERR_LIBLOGNORM_INIT = -2202,/**< cannot obtain liblognorm ctx */
+	RS_RET_ERR_LIBLOGNORM_SAMPDB_LOAD = -2203,/**< liblognorm sampledb load failed */
+	RS_RET_CMD_GONE_AWAY = -2204,/**< config directive existed, but no longer supported */
+	RS_RET_ERR_SCHED_PARAMS = -2205,/**< there is a problem with configured thread scheduling params */
+	RS_RET_SOCKNAME_MISSING = -2206,/**< no socket name configured where one is required */
+	RS_RET_CONF_PARSE_ERROR = -2207,/**< (fatal) error parsing config file */
 	RS_RET_CONF_RQRD_PARAM_MISSING = -2208,/**< required parameter in config object is missing */
+	RS_RET_MOD_UNKNOWN = -2209,/**< module (config name) is unknown */
+	RS_RET_CONFOBJ_UNSUPPORTED = -2210,/**< config objects (v6 conf) are not supported here */
+	RS_RET_MISSING_CNFPARAMS = -2211, /**< missing configuration parameters */
+	RS_RET_NO_LISTNERS = -2212, /**< module loaded, but no listeners are defined */
+	RS_RET_INVLD_PROTOCOL = -2213, /**< invalid protocol specified in config file */
+	RS_RET_CNF_INVLD_FRAMING = -2214, /**< invalid framing specified in config file */
+	RS_RET_LEGA_ACT_NOT_SUPPORTED = -2215, /**< the module (no longer) supports legacy action syntax */
+	RS_RET_MAX_OMSR_REACHED = -2216, /**< max nbr of string requests reached, not supported by core */
+	RS_RET_UID_MISSING = -2217,	/**< a user id is missing (but e.g. a password provided) */
+	RS_RET_DATAFAIL = -2218,	/**< data passed to action caused failure */
+	/* reserved for pre-v6.5 */
+	RS_RET_DUP_PARAM = -2220, /**< config parameter is given more than once */
+	RS_RET_MODULE_ALREADY_IN_CONF = -2221, /**< module already in current configuration */
+	RS_RET_PARAM_NOT_PERMITTED = -2222, /**< legacy parameter no longer permitted (usally already set by v2) */
+	RS_RET_NO_JSON_PASSING = -2223, /**< rsyslog core does not support JSON-passing plugin API */
+	RS_RET_MOD_NO_INPUT_STMT = -2224, /**< (input) module does not support input() statement */
+	RS_RET_NO_CEE_MSG = -2225, /**< the message being processed is NOT CEE-enhanced */
+
+	/**** up to 2290 is reserved for v6 use ****/
+	RS_RET_RELP_ERR = -2291,	/**<< error in RELP processing */
+	/**** up to 3000 is reserved for c7 use ****/
+	RS_RET_JNAME_NO_ROOT = -2301, /**< root element is missing in JSON path */
+	RS_RET_JNAME_INVALID = -2302, /**< JSON path is invalid */
+	RS_RET_JSON_PARSE_ERR = -2303, /**< we had a problem parsing JSON (or extra data) */
+	RS_RET_BSD_BLOCKS_UNSUPPORTED = -2304, /**< BSD-style config blocks are no longer supported */
+	RS_RET_JNAME_NOTFOUND = -2305, /**< JSON name not found (does not exist) */
+	RS_RET_INVLD_SETOP = -2305, /**< invalid variable set operation, incompatible type */
+	RS_RET_RULESET_EXISTS = -2306,/**< ruleset already exists */
+	RS_RET_DEPRECATED = -2307,/**< deprecated functionality is used */
+	RS_RET_DS_PROP_SEQ_ERR = -2308,/**< property sequence error deserializing object */
+	RS_RET_INVLD_PROP = -2309,/**< property name error (unknown name) */
+	RS_RET_NO_RULEBASE = -2310,/**< mmnormalize: rulebase can not be found or otherwise invalid */
+	RS_RET_INVLD_MODE = -2311,/**< invalid mode specified in configuration */
+	RS_RET_INVLD_ANON_BITS = -2312,/**< mmanon: invalid number of bits to anonymize specified */
+	RS_RET_REPLCHAR_IGNORED = -2313,/**< mmanon: replacementChar parameter is ignored */
+	RS_RET_SIGPROV_ERR = -2320,/**< error in signature provider */
+	RS_RET_CRYPROV_ERR = -2321,/**< error in cryptography encryption provider */
+	RS_RET_EI_OPN_ERR = -2322,/**< error opening an .encinfo file */
+	RS_RET_EI_NO_EXISTS = -2323,/**< .encinfo file does not exist (status, not necessarily error!)*/
+	RS_RET_EI_WR_ERR = -2324,/**< error writing an .encinfo file */
+	RS_RET_EI_INVLD_FILE = -2325,/**< header indicates the file is no .encinfo file */
+	RS_RET_CRY_INVLD_ALGO = -2326,/**< user specified invalid (unkonwn) crypto algorithm */
+	RS_RET_CRY_INVLD_MODE = -2327,/**< user specified invalid (unkonwn) crypto mode */
+	RS_RET_QUEUE_DISK_NO_FN = -2328,/**< disk queue configured, but filename not set */
+	RS_RET_CA_CERT_MISSING = -2329,/**< a CA cert is missing where one is required (e.g. TLS) */
+	RS_RET_CERT_MISSING = -2330,/**< a cert is missing where one is required (e.g. TLS) */
+	RS_RET_CERTKEY_MISSING = -2331,/**< a cert (private) key is missing where one is required (e.g. TLS) */
+	RS_RET_STRUC_DATA_INVLD = -2349,/**< structured data is malformed */
+
+	/* up to 2350 reserved for 7.4 */
+	RS_RET_QUEUE_CRY_DISK_ONLY = -2351,/**< crypto provider only supported for disk-associated queues */
+	RS_RET_NO_DATA = -2352,/**< file has no data; more a state than a real error */
+	RS_RET_RELP_AUTH_FAIL = -2353,/**< RELP peer authentication failed */
+	RS_RET_ERR_UDPSEND = -2354,/**< sending msg via UDP failed */
+	RS_RET_LAST_ERRREPORT = -2355,/**< module does not emit more error messages as limit is reached */
+	RS_RET_READ_ERR = -2356,/**< read error occured (file i/o) */
+	RS_RET_CONF_PARSE_WARNING = -2357,/**< warning parsing config file */
+	RS_RET_CONF_WRN_FULLDLY_BELOW_HIGHWTR = -2358,/**< warning queue full delay mark below high wtr mark */
+	RS_RET_RESUMED = -2359,/**< status: action was resumed (used for reporting) */
+	RS_RET_RELP_NO_TLS = -2360,/**< librel does not support TLS (but TLS requested) */
+
+	/* up to 2400 reserved for 7.5 & 7.6 */
+	RS_RET_INVLD_OMOD = -2400, /**< invalid output module, does not provide proper interfaces */
+	RS_RET_INVLD_INTERFACE_INPUT = -2401, /**< invalid value for "interface.input" parameter (ext progs) */
+	RS_RET_PARSER_NAME_EXISTS = -2402, /**< parser name already exists */
+	RS_RET_MOD_NO_PARSER_STMT = -2403, /**< (parser) module does not support parser() statement */
+
 	/* RainerScript error messages (range 1000.. 1999) */
 	RS_RET_SYSVAR_NOT_FOUND = 1001, /**< system variable could not be found (maybe misspelled) */
+	RS_RET_FIELD_NOT_FOUND = 1002, /**< field() function did not find requested field */
 
 	/* some generic error/status codes */
 	RS_RET_OK = 0,			/**< operation successful */
@@ -363,7 +410,12 @@ enum rsRetVal_				/** return value. All methods return this if not specified oth
  * Be sure to call the to-be-returned variable always "iRet" and
  * the function finalizer always "finalize_it".
  */
-#define CHKiRet(code) if((iRet = code) != RS_RET_OK) goto finalize_it
+#if HAVE_BUILTIN_EXCEPT
+#	define CHKiRet(code) if(__builtin_expect(((iRet = code) != RS_RET_OK), 0)) goto finalize_it
+#else
+#	define CHKiRet(code) if((iRet = code) != RS_RET_OK) goto finalize_it
+#endif
+
 /* macro below is to be used if we need our own handling, eg for cleanup */
 #define CHKiRet_Hdlr(code) if((iRet = code) != RS_RET_OK)
 /* macro below is to handle failing malloc/calloc/strdup... which we almost always handle in the same way... */
@@ -381,7 +433,7 @@ enum rsRetVal_				/** return value. All methods return this if not specified oth
 
 /** Object ID. These are for internal checking. Each
  * object is assigned a specific ID. This is contained in
- * all Object structs (just like C++ RTTI). We can use 
+ * all Object structs (just like C++ RTTI). We can use
  * this field to see if we have been passed a correct ID.
  * Other than that, there is currently no other use for
  * the object id.
@@ -413,7 +465,7 @@ typedef enum rsObjectID rsObjID;
 #endif
 
 /**
- * This macro should be used to free objects. 
+ * This macro should be used to free objects.
  * It aids in interpreting dumps during debugging.
  */
 #ifdef NDEBUG
@@ -428,6 +480,37 @@ extern pthread_attr_t default_thread_attr;
 extern int default_thr_sched_policy;
 #endif
 
+/* The following structure defines immutable parameters which need to
+ * be passed as action parameters.
+ *
+ * Note that output plugins may request multiple templates. Let's say
+ * an output requests n templates. Than the overall table must hold
+ * n*nbrMsgs records, and each messages begins on a n-boundary. There
+ * is a macro defined below to access the proper element.
+ *
+ * WARNING: THIS STRUCTURE IS PART OF THE ***OUTPUT MODULE INTERFACE***
+ * It is passed into the doCommit() function. Do NOT modify it until
+ * absolutely necessary - all output plugins need to be changed!
+ *
+ * If a change is "just" for internal working, consider adding a
+ * separate paramter outside of this structure. Of course, it is
+ * best to avoid this as well ;-)
+ * rgerhards, 2013-12-04
+ */
+struct __attribute__ ((__packed__)) actWrkrIParams {
+	uchar *param;
+	uint32_t lenBuf;  /* length of string buffer (if string ptr) */
+	uint32_t lenStr;  /* length of current string (if string ptr) */
+};
+
+/* macro to access actWrkrIParams base object:
+ * param is ptr to base address
+ * nActTpls is the number of templates the action has requested
+ * iMsg is the message index
+ * iTpl is the template index
+ * This macro can be used for read and write access.
+ */
+#define actParam(param, nActTpls, iMsg, iTpl) (param[(iMsg*nActTpls)+iTpl])
 
 /* for the time being, we do our own portability handling here. It
  * looks like autotools either does not yet support checks for it, or
@@ -463,13 +546,25 @@ void dbgprintf(char *, ...) __attribute__((format(printf, 1, 2)));
  * add them. -- rgerhards, 2008-04-17
  */
 extern uchar *glblModPath; /* module load path */
-extern rsRetVal (*glblErrLogger)(int, uchar*);
+extern void (*glblErrLogger)(const int, const int, const uchar*);
 
 /* some runtime prototypes */
 rsRetVal rsrtInit(char **ppErrObj, obj_if_t *pObjIF);
 rsRetVal rsrtExit(void);
 int rsrtIsInit(void);
-rsRetVal rsrtSetErrLogger(rsRetVal (*errLogger)(int, uchar*));
+void rsrtSetErrLogger(void (*errLogger)(const int, const int, const uchar*));
+
+/* this define below is (later) intended to be used to implement empty
+ * structs. TODO: check if compilers supports this and, if not, define
+ * a dummy variable. This requires review of where in code empty structs
+ * are already defined. -- rgerhards, 2010-07-26
+ */
+#define EMPTY_STRUCT
+
+/* TODO: remove this -- this is only for transition of the config system */
+extern rsconf_t *ourConf; /* defined by syslogd.c, a hack for functions that do not
+			     yet receive a copy, so that we can incrementially
+			     compile and change... -- rgerhars, 2011-04-19 */
 
 #endif /* multi-include protection */
 /* vim:set ai:

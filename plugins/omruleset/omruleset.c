@@ -10,7 +10,7 @@
  *
  * File begun on 2009-11-02 by RGerhards
  *
- * Copyright 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -50,6 +50,9 @@
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("omruleset")
+
+static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal);
 
 /* static data */
 DEFobjCurrIf(ruleset);
@@ -60,8 +63,6 @@ DEFobjCurrIf(errmsg);
 DEF_OMOD_STATIC_DATA
 
 /* config variables */
-ruleset_t *pRuleset = NULL;	/* ruleset to enqueue message to (NULL = Default, not recommended) */
-uchar *pszRulesetName = NULL;
 
 
 typedef struct _instanceData {
@@ -69,15 +70,40 @@ typedef struct _instanceData {
 	uchar *pszRulesetName;	/* primarily for debugging/display purposes */
 } instanceData;
 
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
+
+typedef struct configSettings_s {
+	ruleset_t *pRuleset;	/* ruleset to enqueue message to (NULL = Default, not recommended) */
+	uchar *pszRulesetName;
+} configSettings_t;
+static configSettings_t cs;
+
+BEGINinitConfVars		/* (re)set config variables to default values */
+CODESTARTinitConfVars 
+	resetConfigVariables(NULL, NULL);
+ENDinitConfVars
+
 
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
 
 
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
+
+
 BEGINisCompatibleWithFeature
 CODESTARTisCompatibleWithFeature
 ENDisCompatibleWithFeature
+
+
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 
 BEGINfreeInstance
@@ -105,10 +131,14 @@ BEGINdoAction
 CODESTARTdoAction
 	CHKmalloc(pMsg = MsgDup((msg_t*) ppString[0]));
 	DBGPRINTF(":omruleset: forwarding message %p to ruleset %s[%p]\n", pMsg,
-		  (char*) pData->pszRulesetName, pData->pRuleset);
+		  (char*) pWrkrData->pData->pszRulesetName, pWrkrData->pData->pRuleset);
 	MsgSetFlowControlType(pMsg, eFLOWCTL_NO_DELAY);
-	MsgSetRuleset(pMsg, pData->pRuleset);
-	submitMsg(pMsg);
+	MsgSetRuleset(pMsg, pWrkrData->pData->pRuleset);
+	/* Note: we intentionally use submitMsg2() here, as we process messages
+	 * that were already run through the rate-limiter. So it is (at least)
+	 * questionable if they were rate-limited again.
+	 */
+	submitMsg2(pMsg);
 finalize_it:
 ENDdoAction
 
@@ -119,12 +149,12 @@ setRuleset(void __attribute__((unused)) *pVal, uchar *pszName)
 	rsRetVal localRet;
 	DEFiRet;
 
-	localRet = ruleset.GetRuleset(&pRuleset, pszName);
+	localRet = ruleset.GetRuleset(ourConf, &cs.pRuleset, pszName);
 	if(localRet == RS_RET_NOT_FOUND) {
 		errmsg.LogError(0, RS_RET_RULESET_NOT_FOUND, "error: ruleset '%s' not found - ignored", pszName);
 	}
 	CHKiRet(localRet);
-	pszRulesetName = pszName; /* save for later display purposes */
+	cs.pszRulesetName = pszName; /* save for later display purposes */
 
 finalize_it:
 	if(iRet != RS_RET_OK) { /* cleanup needed? */
@@ -143,7 +173,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 		ABORT_FINALIZE(RS_RET_CONFLINE_UNPROCESSED);
 	}
 
-	if(pRuleset == NULL) {
+	if(cs.pRuleset == NULL) {
 		errmsg.LogError(0, RS_RET_NO_RULESET, "error: no ruleset was specified, use "
 				"$ActionOmrulesetRulesetName directive first!");
 		ABORT_FINALIZE(RS_RET_NO_RULESET);
@@ -153,6 +183,9 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	p += sizeof(":omruleset:") - 1; /* eat indicator sequence  (-1 because of '\0'!) */
 	CHKiRet(createInstance(&pData));
 
+	errmsg.LogError(0, RS_RET_DEPRECATED, "warning: omruleset is deprecated, consider "
+			"using the 'call' statement instead");
+
 	/* check if a non-standard template is to be applied */
 	if(*(p-1) == ';')
 		--p;
@@ -161,17 +194,17 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	 * the format specified (if any) is always ignored.
 	 */
 	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, iTplOpts, (uchar*) "RSYSLOG_FileFormat"));
-	pData->pRuleset = pRuleset;
-	pData->pszRulesetName = pszRulesetName;
-	pRuleset = NULL; /* re-set, because there is a high risk of unwanted behavior if we leave it in! */
-	pszRulesetName = NULL; /* note: we must not free, as we handed over this pointer to the instanceDat to the instanceDataa! */
+	pData->pRuleset = cs.pRuleset;
+	pData->pszRulesetName = cs.pszRulesetName;
+	cs.pRuleset = NULL; /* re-set, because there is a high risk of unwanted behavior if we leave it in! */
+	cs.pszRulesetName = NULL; /* note: we must not free, as we handed over this pointer to the instanceDat to the instanceDataa! */
 CODE_STD_FINALIZERparseSelectorAct
 ENDparseSelectorAct
 
 
 BEGINmodExit
 CODESTARTmodExit
-	free(pszRulesetName);
+	free(cs.pszRulesetName);
 	objRelease(errmsg, CORE_COMPONENT);
 	objRelease(ruleset, CORE_COMPONENT);
 ENDmodExit
@@ -180,6 +213,8 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
+CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
 ENDqueryEtryPt
 
 
@@ -189,7 +224,9 @@ ENDqueryEtryPt
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
 {
 	DEFiRet;
-	pRuleset = NULL;
+	cs.pRuleset = NULL;
+	free(cs.pszRulesetName);
+	cs.pszRulesetName = NULL;
 	RETiRet;
 }
 
@@ -200,6 +237,7 @@ BEGINmodInit()
 	unsigned long opts;
 	int bMsgPassingSupported;		/* does core support template passing as an array? */
 CODESTARTmodInit
+INITLegCnfVars
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	/* check if the rsyslog core supports parameter passing code */
@@ -221,6 +259,9 @@ CODEmodInit_QueryRegCFSLineHdlr
 
 	CHKiRet(objUse(ruleset, CORE_COMPONENT));
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
+
+	errmsg.LogError(0, RS_RET_DEPRECATED, "warning: omruleset is deprecated, consider "
+			"using the 'call' statement instead");
 
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionomrulesetrulesetname", 0, eCmdHdlrGetWord,
 				    setRuleset, NULL, STD_LOADABLE_MODULE_ID));

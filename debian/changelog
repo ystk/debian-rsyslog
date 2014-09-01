@@ -1,3 +1,377 @@
+rsyslog (8.4.0-2) unstable; urgency=medium
+
+  * Tweak rsyslog systemd service file. Add Documentation field and restart
+    the rsyslogd daemon on failures.
+  * Cherry-pick upstream patch to fix build failures on platforms without
+    atomic instructions.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 20 Aug 2014 19:36:33 +0200
+
+rsyslog (8.4.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update patches:
+    - Refresh 0001-Don-t-create-a-database.patch.
+    - Drop 0002-Fix-pidfile-location.patch, merged upstream.
+  * Add --disable-generate-man-pages to configure flags to avoid a build
+    dependency on python-docutils. We don't ship the generated man pages
+    anyway.
+  * Add support for external message modification modules which are bound via
+    the new native mmexternal module.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 18 Aug 2014 18:28:20 +0200
+
+rsyslog (8.2.2-5) unstable; urgency=medium
+
+  * Make sure to actually only create the temporary syslog.service symlink on
+    upgrades and avoid the usage of readlink.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 18 Aug 2014 02:43:31 +0200
+
+rsyslog (8.2.2-4) unstable; urgency=medium
+
+  * Fix wheezy → jessie upgrade failure when running under systemd due to the
+    syslog.service symlink temporarily being missing.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 18 Aug 2014 00:39:03 +0200
+
+rsyslog (8.2.2-3) unstable; urgency=low
+
+  * Upload to unstable.
+
+ -- Michael Biebl <biebl@debian.org>  Sun, 29 Jun 2014 14:40:56 +0200
+
+rsyslog (8.2.2-2) experimental; urgency=medium
+
+  * Merge changes from unstable branch.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 23 Jun 2014 13:52:12 +0200
+
+rsyslog (8.2.2-1) experimental; urgency=medium
+
+  * New major upstream release.
+    - Rewritten core engine providing higher performance and better
+      scalability with complex configurations.
+    - Simplified script execution.
+    - Global variable support.
+    - Output part was revamped completely and required changes to all output
+      modules.
+    - Support for external plugins which can be written in any language.
+  * Switch watch file to track v8 stable branch.
+  * Update Build-Depends:
+    - Bump librelp-dev to (>= 1.2.5).
+    - Bump liblogging-stdlog-dev to (>= 1.0.3).
+    - Bump liblognorm-dev to (>= 1.0.0).
+    - Drop libee-dev.
+  * Drop the omruleset module which has been deprecated and replaced by the
+    much more efficient RainerScript "call" statement.
+  * Remove the rsyslog-doc package which is now built from a separate source
+    package.
+  * Fix pidfile location. The pidfile should be stored in /var/run, not /etc.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 09 Jun 2014 21:16:19 +0200
+
+rsyslog (7.6.3-3) unstable; urgency=medium
+
+  * Build against libgnutls28-dev. (Closes: #752304)
+  * Use canonical URIs for Vcs-* fields.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 23 Jun 2014 13:44:55 +0200
+
+rsyslog (7.6.3-2) unstable; urgency=medium
+
+  * Update Build-Depends:
+    - Bump librelp-dev to (>= 1.2.5).
+  * Build omelasticsearch module which provides support for logging to an
+    Elasticsearch server. Split that module into a separate package called
+    rsyslog-elasticsearch. (Closes: #744951)
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 16 May 2014 22:37:05 +0200
+
+rsyslog (7.6.3-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Fixes ompipe to properly handle retries and not cause unnecessary
+      suspension messages. (Closes: #742113)
+  * Update watch file, track v7 stable branch.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 28 Mar 2014 12:36:45 +0100
+
+rsyslog (7.6.2-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update patches.
+  * Update Build-Depends:
+    - Bump librelp-dev to (>= 1.2.4).
+    - Add liblogging-stdlog-dev (>= 1.0.1).
+  * Fix typo in rsyslog.postrm: dissappear → disappear
+  * Drop useless "exit 0" from maintainer scripts.
+  * Enable and install the mmutf8fix, mmpstrucdata and mmsequence message
+    modification modules.
+  * Stop installing debian/sample.conf. Upstream ships a more up-to-date
+    example configuration file.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 17 Mar 2014 17:26:08 +0100
+
+rsyslog (7.4.8-1) unstable; urgency=medium
+
+  [ Michael Biebl ]
+  * New upstream release.
+  * Update Build-Depends:
+    - Bump libestr-dev to (>= 0.1.9).
+    - Tighten liblognorm-dev to (<< 1.0.0).
+    - Replace libjson0-dev with libjson-c-dev, we no longer need the
+      transitional package.
+  * Bump Standards-Version to 3.9.5. No further changes.
+
+  [ Daniel Pocock ]
+  * Make template parameter not mandatory in mongodb output plugin. Patch
+    cherry-picked from upstream Git. (Closes: #740869, #721277)
+  * Ensure JSON templates are NUL terminated. Patch cherry-picked from
+    upstream Git.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 11 Mar 2014 19:52:49 +0100
+
+rsyslog (7.4.4-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 03 Sep 2013 22:42:49 +0200
+
+rsyslog (7.4.3-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 23 Jul 2013 01:01:40 +0200
+
+rsyslog (7.4.2-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 06 Jul 2013 00:14:19 +0200
+
+rsyslog (7.4.1-3) unstable; urgency=low
+
+  * Bump Build-Depends on dh-systemd to (>= 1.4) to ensure we have a recent
+    enough version of init-system-helpers which properly deals with a missing
+    state directory. (Closes: #714265)
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 27 Jun 2013 19:21:04 +0200
+
+rsyslog (7.4.1-2) unstable; urgency=low
+
+  * Use dh-systemd to setup the systemd service properly.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 26 Jun 2013 21:13:33 +0200
+
+rsyslog (7.4.1-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 17 Jun 2013 23:38:51 +0200
+
+rsyslog (7.4.0-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 06 Jun 2013 18:51:11 +0200
+
+rsyslog (7.3.15-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 15 May 2013 18:21:02 +0200
+
+rsyslog (7.3.14-2) unstable; urgency=low
+
+  * Upload to unstable.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 10 May 2013 01:41:23 +0200
+
+rsyslog (7.3.14-1) experimental; urgency=low
+
+  * New upstream release.
+  * Remove 02-fix-non-libgcrypt-build.patch, merged upstream.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 06 May 2013 23:44:17 +0200
+
+rsyslog (7.3.12-3) experimental; urgency=low
+
+  * Only build and install the imkmsg module on Linux.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 26 Apr 2013 16:46:19 +0200
+
+rsyslog (7.3.12-2) experimental; urgency=low
+
+  * Fix build when libgcrypt support is disabled to not pick up an unnecessary
+    libgcrypt dependency.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 25 Apr 2013 23:44:03 +0200
+
+rsyslog (7.3.12-1) experimental; urgency=low
+
+  * New upstream release.
+  * Disable log file encryption support for now.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 25 Apr 2013 15:14:37 +0200
+
+rsyslog (7.3.10-1) experimental; urgency=low
+
+  * New upstream release.
+  * Bump Build-Depends on librelp-dev to (>= 1.0.3).
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 10 Apr 2013 12:31:15 +0200
+
+rsyslog (7.3.9-1) experimental; urgency=low
+
+  * New upstream release.
+  * Remove patches which have been applied upstream.
+  * Bump Build-Depends on libestr-dev to (>= 0.1.5).
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 27 Mar 2013 13:14:44 +0100
+
+rsyslog (7.3.8-4) experimental; urgency=low
+
+  * Add Build-Depends on bison so we can build twice in a row. "make clean"
+    removes the generated grammar/grammer.[ch].
+  * Another patch to fix build failures on architectures where prctl is not
+    available. (Closes: #703429)
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 21 Mar 2013 16:45:17 +0100
+
+rsyslog (7.3.8-3) experimental; urgency=low
+
+  * The previous fix was incomplete. Cherry-pick another upstream patch to fix
+    the build failure on non-Linux. (Closes: #703429)
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 20 Mar 2013 11:44:10 +0100
+
+rsyslog (7.3.8-2) experimental; urgency=low
+
+  * Cherry pick patch from upstream which fixes the build on architectures
+    which don't have SYS_gettid. (Closes: #703429)
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 19 Mar 2013 16:40:58 +0100
+
+rsyslog (7.3.8-1) experimental; urgency=low
+
+  * New upstream development release from the v7-devel branch.
+  * Update watch file to track development releases.
+  * The imrelp module now properly supports listening on IPv4 resp. IPv6 only.
+    This requires librelp >= 1.0.2, so bump the Build-Depends accordingly.
+    (Closes: #649355)
+  * Enable the mmanon module which adds support for anonymizing IPv4
+    addresses.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 18 Mar 2013 16:21:35 +0100
+
+rsyslog (7.2.6-1) experimental; urgency=low
+
+  * New upstream release.
+  * Bump Standards-Version to 3.9.4. No further changes.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 05 Mar 2013 17:36:18 +0100
+
+rsyslog (7.2.5-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 09 Jan 2013 00:04:39 +0100
+
+rsyslog (7.2.4-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 07 Dec 2012 16:01:00 +0100
+
+rsyslog (7.2.3-2) experimental; urgency=low
+
+  * Fix permissions of the spool/work directory. (Closes: #693099)
+  * Suggest rsyslog-mongodb.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 28 Nov 2012 22:16:33 +0100
+
+rsyslog (7.2.3-1) experimental; urgency=low
+
+  * New upstream release.
+  * Stop providing static start and stop priorities for dh_installinit. Those
+    are no longer tested and we rely on the dependency information in the LSB
+    header now to get a correct ordering when being run under sysvinit.
+
+ -- Michael Biebl <biebl@debian.org>  Wed, 21 Nov 2012 17:51:27 +0100
+
+rsyslog (7.2.2-1) experimental; urgency=low
+
+  * New upstream release.
+  * Drop patches which have been merged upstream.
+
+ -- Michael Biebl <biebl@debian.org>  Fri, 16 Nov 2012 17:51:59 +0100
+
+rsyslog (7.2.1-2) experimental; urgency=low
+
+  * Disable imptcp on non-Linux plattforms as this module is Linux-specific.
+    Making it available everywhere would require more extensive porting work.
+  * debian/patches/02-imkmsg-includes.patch: Don't include <sys/klog.h> on
+    non-Linux plattforms.
+  * debian/patches/03-sysinfo.patch: Getting the uptime via sysinfo() is
+    Linux-specific, so only use that on architectures supporting it.
+  * Use dh-autoreconf to update the build system.
+  * Thanks Guillem Jover for the patches to make rsyslog compile on non-Linux.
+    (Closes: #692992)
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 13 Nov 2012 22:56:58 +0100
+
+rsyslog (7.2.1-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Michael Biebl <biebl@debian.org>  Mon, 29 Oct 2012 16:30:14 +0100
+
+rsyslog (7.2.0-1) experimental; urgency=low
+
+  * New upstream release.
+    - Support for BSD-style blocks has been removed and the rsyslog.conf
+      man page was updated accordingly. (Closes: #585536)
+    - Fixes immark documentation wrt $MarkMessagePeriod. (Closes: #605831)
+    - No longer requires libgcrypt with newer GnuTLS versions.
+      (Closes: #638658)
+  * Track stable releases again.
+  * Remove unnecessary duplication from the init script and also drop the -c
+    compatibility mode option.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 23 Oct 2012 01:03:54 +0200
+
+rsyslog (7.1.12-1) experimental; urgency=low
+
+  * New major upstream release from the v7 beta branch. (Closes: #645640)
+    - Greatly improved configuration language and execution engine.
+    - Full support for structured logging and project lumberjack / CEE.
+    - More plugins - like support for MongoDB or the kernel's new structured
+      logging system.
+    - Higher performance - optimizations for script-based filters, enhanced
+      multithreaded TCP input plugin, DNS cache and more.
+  * Update watch file to track beta releases.
+  * Drop patches which have been merged upstream.
+  * Update Build-Depends:
+    - Add libestr-dev, libee-dev, libjson0-dev and uuid-dev.
+    - Bump librelp-dev to (>= 1.0.1).
+  * Build imkmsg module which provides support for reading structured kernel
+    log messages.
+  * Build imptcp module which provides less features then imtcp but is quite a
+    bit faster.
+  * Build message modification modules mmjsonparse and mmnormalize which
+    provide functionality related to structured logging/lumberjack/CEE. This
+    requires liblognorm.
+  * Build ommongodb module which provides support for logging to a MongoDB
+    database. Split that module into a separate package called
+    rsyslog-mongodb.
+  * Use --list-missing to show uninstalled files.
+  * Remove upgrade code from rsyslog.postinst which is no longer necessary.
+  * Remove the -c compatibility mode option from rsyslog.default. This option
+    has been obsoleted upstream. (Closes: #598713)
+
+ -- Michael Biebl <biebl@debian.org>  Sun, 21 Oct 2012 22:56:11 +0200
+
 rsyslog (5.8.11-3) unstable; urgency=low
 
   * debian/patches/04-systemd_journal.patch: The journal has replaced

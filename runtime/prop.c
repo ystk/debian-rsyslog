@@ -73,7 +73,7 @@ ENDobjDestruct(prop)
 /* set string, we make our own private copy! This MUST only be called BEFORE
  * ConstructFinalize()!
  */
-static rsRetVal SetString(prop_t *pThis, uchar *psz, int len)
+static rsRetVal SetString(prop_t *pThis, const uchar *psz, const int len)
 {
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, prop);
@@ -100,7 +100,7 @@ static int GetStringLen(prop_t *pThis)
 
 
 /* get string */
-static rsRetVal GetString(prop_t *pThis, uchar **ppsz, int *plen)
+rsRetVal GetString(prop_t *pThis, uchar **ppsz, int *plen)
 {
 	BEGINfunc
 	ISOBJ_TYPE_assert(pThis, prop);
@@ -139,15 +139,24 @@ static rsRetVal AddRef(prop_t *pThis)
 
 /* this is a "do it all in one shot" function that creates a new property,
  * assigns the provided string to it and finalizes the property. Among the
- * convenience, it is alos (very, very) slightly faster.
+ * convenience, it is also (very, very) slightly faster.
  * rgerhards, 2009-07-01
  */
-static rsRetVal CreateStringProp(prop_t **ppThis, uchar* psz, int len)
+static rsRetVal CreateStringProp(prop_t **ppThis, const uchar* psz, const int len)
 {
+	prop_t *pThis = NULL;
 	DEFiRet;
-	propConstruct(ppThis);
-	SetString(*ppThis, psz, len);
-	propConstructFinalize(*ppThis);
+
+	CHKiRet(propConstruct(&pThis));
+	CHKiRet(SetString(pThis, psz, len));
+	CHKiRet(propConstructFinalize(pThis));
+	*ppThis = pThis;
+finalize_it:
+	if(iRet != RS_RET_OK) {
+		if(pThis != NULL)
+			propDestruct(&pThis);
+	}
+
 	RETiRet;
 }
 
@@ -161,7 +170,7 @@ static rsRetVal CreateStringProp(prop_t **ppThis, uchar* psz, int len)
  * existing property).
  * rgerhards, 2009-07-01
  */
-rsRetVal CreateOrReuseStringProp(prop_t **ppThis, uchar *psz, int len)
+rsRetVal CreateOrReuseStringProp(prop_t **ppThis, const uchar *psz, const int len)
 {
 	uchar *pszPrev;
 	int lenPrev;

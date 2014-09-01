@@ -1,5 +1,3 @@
-# Debian patches for rsyslog
-01-dont_create_db.patch
-02-path_max.patch
-03-fix_relp_dns_resolution.patch
-04-systemd_journal.patch
+0001-Don-t-create-a-database.patch
+0002-systemd-service-file-tweaks.patch
+0003-fix-build-problem-on-platforms-without-atomic-instru.patch

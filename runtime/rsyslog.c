@@ -35,7 +35,7 @@
  *
  * Module begun 2008-04-16 by Rainer Gerhards
  *
- * Copyright 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -59,28 +59,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <liblogging/stdlog.h>
 
 #include "rsyslog.h"
 #include "obj.h"
-#include "vm.h"
-#include "sysvar.h"
 #include "stringbuf.h"
 #include "wti.h"
 #include "wtp.h"
-#include "expr.h"
-#include "ctok.h"
-#include "vmop.h"
-#include "vmstk.h"
-#include "vmprg.h"
 #include "datetime.h"
 #include "queue.h"
 #include "conf.h"
+#include "rsconf.h"
 #include "glbl.h"
 #include "errmsg.h"
 #include "prop.h"
-#include "rule.h"
 #include "ruleset.h"
 #include "parser.h"
+#include "lookup.h"
 #include "strgen.h"
 #include "statsobj.h"
 #include "atomic.h"
@@ -92,11 +87,11 @@ int default_thr_sched_policy;
 #endif
 
 /* forward definitions */
-static rsRetVal dfltErrLogger(int, uchar *errMsg);
+static void dfltErrLogger(const int, const int, const uchar *errMsg);
 
 /* globally visible static data - see comment in rsyslog.h for details */
 uchar *glblModPath; /* module load path */
-rsRetVal (*glblErrLogger)(int, uchar*) = dfltErrLogger; /* the error logger to use by the errmsg module */
+void (*glblErrLogger)(const int, const int, const uchar*) = dfltErrLogger; /* the error logger to use by the errmsg module */
 
 /* static data */
 static int iRefCount = 0; /* our refcount - it MUST exist only once inside a process (not thread)
@@ -108,24 +103,21 @@ static int iRefCount = 0; /* our refcount - it MUST exist only once inside a pro
  * default so that we can log errors during the intial phase, most importantly
  * during initialization. -- rgerhards. 2008-04-17
  */
-static rsRetVal dfltErrLogger(int iErr, uchar *errMsg)
+static void
+dfltErrLogger(const int severity, const int iErr, const uchar *errMsg)
 {
-	DEFiRet;
-	fprintf(stderr, "rsyslog runtime error(%d): %s\n", iErr, errMsg);
-	RETiRet;
+	fprintf(stderr, "rsyslog runtime error(%d,%d): %s\n", severity, iErr, errMsg);
 }
 
 
 /* set the error log function
  * rgerhards, 2008-04-18
  */
-rsRetVal
-rsrtSetErrLogger(rsRetVal (*errLogger)(int, uchar*))
+void
+rsrtSetErrLogger(void (*errLogger)(const int, const int, const uchar*))
 {
-	DEFiRet;
 	assert(errLogger != NULL);
 	glblErrLogger = errLogger;
-	RETiRet;
 }
 
 
@@ -145,6 +137,8 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 
 	if(iRefCount == 0) {
 		/* init runtime only if not yet done */
+		stdlog_init(0);
+		stdlog_hdl = NULL;
 #ifdef HAVE_PTHREAD_SETSCHEDPARAM
 	    	CHKiRet(pthread_getschedparam(pthread_self(),
 			    		      &default_thr_sched_policy,
@@ -177,24 +171,6 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 		CHKiRet(glblClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "msg";
 		CHKiRet(msgClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "ctok_token";
-		CHKiRet(ctok_tokenClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "ctok";
-		CHKiRet(ctokClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "vmstk";
-		CHKiRet(vmstkClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "sysvar";
-		CHKiRet(sysvarClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "vm";
-		CHKiRet(vmClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "vmop";
-		CHKiRet(vmopClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "vmprg";
-		CHKiRet(vmprgClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "expr";
-		CHKiRet(exprClassInit(NULL));
-		if(ppErrObj != NULL) *ppErrObj = "rule";
-		CHKiRet(ruleClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "ruleset";
 		CHKiRet(rulesetClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "wti";
@@ -209,6 +185,10 @@ rsrtInit(char **ppErrObj, obj_if_t *pObjIF)
 		CHKiRet(parserClassInit(NULL));
 		if(ppErrObj != NULL) *ppErrObj = "strgen";
 		CHKiRet(strgenClassInit(NULL));
+		if(ppErrObj != NULL) *ppErrObj = "rsconf";
+		CHKiRet(rsconfClassInit(NULL));
+		if(ppErrObj != NULL) *ppErrObj = "lookup";
+		CHKiRet(lookupClassInit());
 
 		/* dummy "classes" */
 		if(ppErrObj != NULL) *ppErrObj = "str";
@@ -240,7 +220,6 @@ rsrtExit(void)
 		confClassExit();
 		glblClassExit();
 		rulesetClassExit();
-		ruleClassExit();
 
 		objClassExit(); /* *THIS* *MUST/SHOULD?* always be the first class initilizer being called (except debug)! */
 	}

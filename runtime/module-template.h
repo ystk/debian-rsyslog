@@ -4,25 +4,23 @@
  *
  * File begun on 2007-07-25 by RGerhards
  *
- * Copyright 2007 Adiscon GmbH. This is Adiscon-exclusive code without any other
- * contributions. *** GPLv3 ***
+ * Copyright 2007-2012 Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * Rsyslog is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Rsyslog is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Rsyslog.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #ifndef	MODULE_TEMPLATE_H_INCLUDED
 #define	MODULE_TEMPLATE_H_INCLUDED 1
@@ -35,7 +33,7 @@
 /* macro to define standard output-module static data members
  */
 #define DEF_MOD_STATIC_DATA \
-	static __attribute__((unused)) rsRetVal (*omsdRegCFSLineHdlr)();
+	static __attribute__((unused)) rsRetVal (*omsdRegCFSLineHdlr)(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie);
 
 #define DEF_OMOD_STATIC_DATA \
 	DEF_MOD_STATIC_DATA \
@@ -110,6 +108,16 @@ static rsRetVal modGetID(void **pID) \
 		return RS_RET_OK;\
 	}
 
+/* macro to provide the v6 config system module name
+ */
+#define MODULE_CNFNAME(name) \
+static rsRetVal modGetCnfName(uchar **cnfName) \
+	{ \
+		*cnfName = (uchar*) name; \
+		return RS_RET_OK;\
+	}
+
+
 /* to following macros are used to generate function headers and standard
  * functionality. It works as follows (described on the sample case of
  * createInstance()):
@@ -165,6 +173,44 @@ static rsRetVal freeInstance(void* pModData)\
 	RETiRet;\
 }
 
+/* createWrkrInstance()
+ */
+#define BEGINcreateWrkrInstance \
+static rsRetVal createWrkrInstance(wrkrInstanceData_t **ppWrkrData, instanceData *pData)\
+	{\
+	DEFiRet; /* store error code here */\
+	wrkrInstanceData_t *pWrkrData; /* use this to point to data elements */
+
+#define CODESTARTcreateWrkrInstance \
+	if((pWrkrData = calloc(1, sizeof(wrkrInstanceData_t))) == NULL) {\
+		*ppWrkrData = NULL;\
+		ENDfunc \
+		return RS_RET_OUT_OF_MEMORY;\
+	} \
+	pWrkrData->pData = pData;
+
+#define ENDcreateWrkrInstance \
+	*ppWrkrData = pWrkrData;\
+	RETiRet;\
+}
+
+/* freeWrkrInstance */
+#define BEGINfreeWrkrInstance \
+static rsRetVal freeWrkrInstance(void* pd)\
+{\
+	DEFiRet;\
+	wrkrInstanceData_t *pWrkrData;
+
+#define CODESTARTfreeWrkrInstance \
+	pWrkrData = (wrkrInstanceData_t*) pd;
+
+#define ENDfreeWrkrInstance \
+	if(pWrkrData != NULL)\
+		free(pWrkrData); /* we need to free this in any case */\
+	RETiRet;\
+}
+
+
 /* isCompatibleWithFeature()
  */
 #define BEGINisCompatibleWithFeature \
@@ -184,7 +230,7 @@ static rsRetVal isCompatibleWithFeature(syslogFeature __attribute__((unused)) eF
  * introduced in v4.3.3 -- rgerhards, 2009-04-27
  */
 #define BEGINbeginTransaction \
-static rsRetVal beginTransaction(instanceData __attribute__((unused)) *pData)\
+static rsRetVal beginTransaction(wrkrInstanceData_t __attribute__((unused)) *pWrkrData)\
 {\
 	DEFiRet;
 
@@ -195,11 +241,28 @@ static rsRetVal beginTransaction(instanceData __attribute__((unused)) *pData)\
 }
 
 
+/* commitTransaction()
+ * Commits a transaction. Note that beginTransaction() must have been
+ * called before this entry point. It receives the full batch of messages
+ * to be processed in pParam parameter.
+ * introduced in v8.1.3 -- rgerhards, 2013-12-04
+ */
+#define BEGINcommitTransaction \
+static rsRetVal commitTransaction(wrkrInstanceData_t __attribute__((unused)) *const pWrkrData, actWrkrIParams_t *const pParams, const unsigned nParams)\
+{\
+	DEFiRet;
+
+#define CODESTARTcommitTransaction /* currently empty, but may be extended */
+
+#define ENDcommitTransaction \
+	RETiRet;\
+}
+
 /* endTransaction()
  * introduced in v4.3.3 -- rgerhards, 2009-04-27
  */
 #define BEGINendTransaction \
-static rsRetVal endTransaction(instanceData __attribute__((unused)) *pData)\
+static rsRetVal endTransaction(wrkrInstanceData_t __attribute__((unused)) *pWrkrData)\
 {\
 	DEFiRet;
 
@@ -213,7 +276,7 @@ static rsRetVal endTransaction(instanceData __attribute__((unused)) *pData)\
 /* doAction()
  */
 #define BEGINdoAction \
-static rsRetVal doAction(uchar __attribute__((unused)) **ppString, unsigned __attribute__((unused)) iMsgOpts, instanceData __attribute__((unused)) *pData)\
+static rsRetVal doAction(uchar __attribute__((unused)) **ppString, wrkrInstanceData_t __attribute__((unused)) *pWrkrData)\
 {\
 	DEFiRet;
 
@@ -236,7 +299,8 @@ static rsRetVal dbgPrintInstInfo(void *pModData)\
 	instanceData *pData = NULL;
 
 #define CODESTARTdbgPrintInstInfo \
-	pData = (instanceData*) pModData;
+	pData = (instanceData*) pModData; \
+	(void)pData; /* prevent compiler warning if unused! */
 
 #define ENDdbgPrintInstInfo \
 	RETiRet;\
@@ -275,7 +339,7 @@ static rsRetVal parseSelectorAct(uchar **pp, void **ppModData, omodStringRequest
 
 #define CODE_STD_FINALIZERparseSelectorAct \
 finalize_it:\
-	if(iRet == RS_RET_OK || iRet == RS_RET_SUSPENDED) {\
+	if(iRet == RS_RET_OK || iRet == RS_RET_OK_WARN || iRet == RS_RET_SUSPENDED) {\
 		*ppModData = pData;\
 		*pp = p;\
 	} else {\
@@ -294,6 +358,111 @@ finalize_it:\
 }
 
 
+/* newActInst()
+ * Extra comments:
+ * This creates a new instance of a the action that implements the call.
+ * This is part of the conf2 (rsyslog v6) config system. It is called by
+ * the core when an action object has been obtained. The output module
+ * must then verify parameters and create a new action instance (if
+ * parameters are acceptable) or return an error code.
+ * On exit, ppModData must point to instance data. Also, a string
+ * request object must be created and filled. A macro is defined
+ * for that.
+ * For the most usual case, we have defined a macro below.
+ * If more than one string is requested, the macro can be used together
+ * with own code that overwrites the entry count. In this case, the
+ * macro must come before the own code. It is recommended to be
+ * placed right after CODESTARTnewActInst.
+ */
+#define BEGINnewActInst \
+static rsRetVal newActInst(uchar __attribute__((unused)) *modName, \
+	struct nvlst *lst, void **ppModData, omodStringRequest_t **ppOMSR)\
+{\
+	DEFiRet;\
+	instanceData *pData = NULL; \
+	*ppOMSR = NULL;
+
+#define CODESTARTnewActInst \
+
+#define CODE_STD_STRING_REQUESTnewActInst(NumStrReqEntries) \
+	CHKiRet(OMSRconstruct(ppOMSR, NumStrReqEntries));
+
+#define CODE_STD_FINALIZERnewActInst \
+finalize_it:\
+	if(iRet == RS_RET_OK || iRet == RS_RET_SUSPENDED) {\
+		*ppModData = pData;\
+	} else {\
+		/* cleanup, we failed */\
+		if(*ppOMSR != NULL) {\
+			OMSRdestruct(*ppOMSR);\
+			*ppOMSR = NULL;\
+		}\
+		if(pData != NULL) {\
+			freeInstance(pData);\
+		} \
+	}
+
+#define ENDnewActInst \
+	RETiRet;\
+}
+
+
+/* newInpInst()
+ * This is basically the equivalent to newActInst() for creating input
+ * module (listener) instances.
+ */
+#define BEGINnewInpInst \
+static rsRetVal newInpInst(struct nvlst *lst)\
+{\
+	DEFiRet;
+
+#define CODESTARTnewInpInst \
+
+#define CODE_STD_FINALIZERnewInpInst
+
+#define ENDnewInpInst \
+	RETiRet;\
+}
+
+
+
+/* newParserInst()
+ * This is basically the equivalent to newActInst() for creating parser
+ * module (listener) instances.
+ */
+#define BEGINnewParserInst \
+static rsRetVal newParserInst(struct nvlst *lst, void *pinst)\
+{\
+	instanceConf_t *inst; \
+	DEFiRet;
+
+#define CODESTARTnewParserInst \
+
+#define CODE_STD_FINALIZERnewParserInst
+
+#define ENDnewParserInst \
+	if(iRet == RS_RET_OK) \
+		*((instanceConf_t**)pinst) = inst; \
+	RETiRet;\
+}
+
+
+/* freeParserInst */
+#define BEGINfreeParserInst \
+static rsRetVal freeParserInst(void* pi)\
+{\
+	DEFiRet;\
+	instanceConf_t *pInst;
+
+#define CODESTARTfreeParserInst\
+	pInst = (instanceConf_t*) pi;
+
+#define ENDfreeParserInst\
+	if(pInst != NULL)\
+		free(pInst);\
+	RETiRet;\
+}
+
 /* tryResume()
  * This entry point is called to check if a module can resume operations. This
  * happens when a module requested that it be suspended. In suspended state,
@@ -304,18 +473,31 @@ finalize_it:\
  * rgerhard, 2007-08-02
  */
 #define BEGINtryResume \
-static rsRetVal tryResume(instanceData __attribute__((unused)) *pData)\
+static rsRetVal tryResume(wrkrInstanceData_t __attribute__((unused)) *pWrkrData)\
 {\
 	DEFiRet;
 
 #define CODESTARTtryResume \
-	assert(pData != NULL);
+	assert(pWrkrData != NULL);
 
 #define ENDtryResume \
 	RETiRet;\
 }
 
 
+/* initConfVars() - initialize pre-v6.3-config variables
+ */
+#define BEGINinitConfVars \
+static rsRetVal initConfVars(void)\
+{\
+	DEFiRet;
+
+#define CODESTARTinitConfVars 
+
+#define ENDinitConfVars \
+	RETiRet;\
+}
+	
 
 /* queryEtryPt()
  */
@@ -357,8 +539,7 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 	}
 
 /* the following definition is the standard block for queryEtryPt for output
- * modules. This can be used if no specific handling (e.g. to cover version
- * differences) is needed.
+ * modules WHICH DO NOT SUPPORT TRANSACTIONS.
  */
 #define CODEqueryEtryPt_STD_OMOD_QUERIES \
 	CODEqueryEtryPt_STD_MOD_QUERIES \
@@ -376,6 +557,34 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 		*pEtryPoint = tryResume;\
 	}
 
+/* the following definition is the standard block for queryEtryPt for output
+ * modules using the transaction interface.
+ */
+#define CODEqueryEtryPt_STD_OMODTX_QUERIES \
+	CODEqueryEtryPt_STD_MOD_QUERIES \
+	else if(!strcmp((char*) name, "beginTransaction")) {\
+		*pEtryPoint = beginTransaction;\
+	} else if(!strcmp((char*) name, "commitTransaction")) {\
+		*pEtryPoint = commitTransaction;\
+	} else if(!strcmp((char*) name, "dbgPrintInstInfo")) {\
+		*pEtryPoint = dbgPrintInstInfo;\
+	} else if(!strcmp((char*) name, "freeInstance")) {\
+		*pEtryPoint = freeInstance;\
+	} else if(!strcmp((char*) name, "parseSelectorAct")) {\
+		*pEtryPoint = parseSelectorAct;\
+	} else if(!strcmp((char*) name, "isCompatibleWithFeature")) {\
+		*pEtryPoint = isCompatibleWithFeature;\
+	} else if(!strcmp((char*) name, "tryResume")) {\
+		*pEtryPoint = tryResume;\
+	}
+
+/* standard queries for output module interface in rsyslog v8+ */
+#define CODEqueryEtryPt_STD_OMOD8_QUERIES \
+	else if(!strcmp((char*) name, "createWrkrInstance")) {\
+		*pEtryPoint = createWrkrInstance;\
+	} else if(!strcmp((char*) name, "freeWrkrInstance")) {\
+		*pEtryPoint = freeWrkrInstance;\
+	}
 
 /* the following definition is queryEtryPt block that must be added
  * if an output module supports the transactional interface.
@@ -413,6 +622,70 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 		*pEtryPoint = afterRun;\
 	}
 
+
+/* the following block is to be added for modules that support the v2
+ * config system. The config name is also provided.
+ */
+#define CODEqueryEtryPt_STD_CONF2_QUERIES \
+	  else if(!strcmp((char*) name, "beginCnfLoad")) {\
+		*pEtryPoint = beginCnfLoad;\
+	} else if(!strcmp((char*) name, "endCnfLoad")) {\
+		*pEtryPoint = endCnfLoad;\
+	} else if(!strcmp((char*) name, "checkCnf")) {\
+		*pEtryPoint = checkCnf;\
+	} else if(!strcmp((char*) name, "activateCnf")) {\
+		*pEtryPoint = activateCnf;\
+	} else if(!strcmp((char*) name, "freeCnf")) {\
+		*pEtryPoint = freeCnf;\
+	} \
+	CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
+
+/* the following block is to be added for modules that support v2
+ * module global parameters [module(...)]
+ */
+#define CODEqueryEtryPt_STD_CONF2_setModCnf_QUERIES \
+	  else if(!strcmp((char*) name, "setModCnf")) {\
+		*pEtryPoint = setModCnf;\
+	} \
+
+/* the following block is to be added for output modules that support the v2
+ * config system. The config name is also provided.
+ */
+#define CODEqueryEtryPt_STD_CONF2_OMOD_QUERIES \
+	  else if(!strcmp((char*) name, "newActInst")) {\
+		*pEtryPoint = newActInst;\
+	} \
+	CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
+
+
+/* the following block is to be added for input modules that support the v2
+ * config system. The config name is also provided.
+ */
+#define CODEqueryEtryPt_STD_CONF2_IMOD_QUERIES \
+	  else if(!strcmp((char*) name, "newInpInst")) {\
+		*pEtryPoint = newInpInst;\
+	} \
+	CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
+
+
+/* the following block is to be added for modules that require
+ * pre priv drop activation support.
+ */
+#define CODEqueryEtryPt_STD_CONF2_PREPRIVDROP_QUERIES \
+	  else if(!strcmp((char*) name, "activateCnfPrePrivDrop")) {\
+		*pEtryPoint = activateCnfPrePrivDrop;\
+	}
+
+/* the following block is to be added for modules that support
+ * their config name. This is required for the rsyslog v6 config
+ * system, especially for outout modules which do not require
+ * the new set of begin/end config settings.
+ */
+#define CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES \
+	  else if(!strcmp((char*) name, "getModCnfName")) {\
+		*pEtryPoint = modGetCnfName;\
+	}
+
 /* the following definition is the standard block for queryEtryPt for LIBRARY
  * modules. This can be used if no specific handling (e.g. to cover version
  * differences) is needed.
@@ -431,6 +704,24 @@ static rsRetVal queryEtryPt(uchar *name, rsRetVal (**pEtryPoint)())\
 	} else if(!strcmp((char*) name, "GetParserName")) {\
 		*pEtryPoint = GetParserName;\
 	}
+
+/* the following definition is the standard block for queryEtryPt for PARSER
+ * modules obeying the v2+ config interface.
+ */
+#define CODEqueryEtryPt_STD_PMOD2_QUERIES \
+	CODEqueryEtryPt_STD_MOD_QUERIES \
+	else if(!strcmp((char*) name, "parse2")) {\
+		*pEtryPoint = parse2;\
+	} else if(!strcmp((char*) name, "GetParserName")) {\
+		*pEtryPoint = GetParserName;\
+	} else if(!strcmp((char*) name, "newParserInst")) {\
+		*pEtryPoint = newParserInst;\
+	} else if(!strcmp((char*) name, "freeParserInst")) {\
+		*pEtryPoint = freeParserInst;\
+	} \
+	CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
+
+
 
 /* the following definition is the standard block for queryEtryPt for Strgen
  * modules. This can be used if no specific handling (e.g. to cover version
@@ -485,6 +776,10 @@ rsRetVal modInit##uniqName(int iIFVersRequested __attribute__((unused)), int *ip
 	/* now get the obj interface so that we can access other objects */ \
 	CHKiRet(pObjGetObjInterface(&obj));
 
+/* do those initializations necessary for legacy config variables */
+#define INITLegCnfVars \
+	initConfVars();
+
 #define ENDmodInit \
 finalize_it:\
 	*pQueryEtryPt = queryEtryPt;\
@@ -522,7 +817,6 @@ finalize_it:\
 #define CODEmodInit_QueryRegCFSLineHdlr \
 	CHKiRet(pHostQueryEtryPt((uchar*)"regCfSysLineHdlr", &omsdRegCFSLineHdlr));
 
-#endif /* #ifndef MODULE_TEMPLATE_H_INCLUDED */
 
 /* modExit()
  * This is the counterpart to modInit(). It destroys a module and makes it ready for
@@ -544,6 +838,152 @@ static rsRetVal modExit(void)\
 #define CODESTARTmodExit 
 
 #define ENDmodExit \
+	RETiRet;\
+}
+
+
+/* beginCnfLoad()
+ * This is a function tells an input module that a new config load begins.
+ * The core passes in a handle to the new module-specific module conf to
+ * the module. -- rgerards, 2011-05-03
+ */
+#define BEGINbeginCnfLoad \
+static rsRetVal beginCnfLoad(modConfData_t **ptr, __attribute__((unused)) rsconf_t *pConf)\
+{\
+	modConfData_t *pModConf; \
+	DEFiRet;
+
+#define CODESTARTbeginCnfLoad \
+	if((pModConf = calloc(1, sizeof(modConfData_t))) == NULL) {\
+		*ptr = NULL;\
+		ENDfunc \
+		return RS_RET_OUT_OF_MEMORY;\
+	}
+
+#define ENDbeginCnfLoad \
+	*ptr = pModConf;\
+	RETiRet;\
+}
+
+
+/* setModCnf()
+ * This function permits to set module global parameters via the v2 config
+ * interface. It may be called multiple times, but parameters must not be
+ * set in a conflicting way. The module must use its current config load
+ * context when processing the directives.
+ * Note that lst may be NULL, especially if the module is loaded via the
+ * legacy config system. The module must check for this.
+ * NOTE: This entry point must only be implemented if module global
+ * parameters are actually required.
+ */
+#define BEGINsetModCnf \
+static rsRetVal setModCnf(struct nvlst *lst)\
+{\
+	DEFiRet;
+
+#define CODESTARTsetModCnf 
+
+#define ENDsetModCnf \
+	RETiRet;\
+}
+
+
+/* endCnfLoad()
+ * This is a function tells an input module that the current config load ended.
+ * It gets a last chance to make changes to its in-memory config object. After 
+ * this call, the config object must no longer be changed.
+ * The pModConf pointer passed into the module must no longer be used.
+ * rgerards, 2011-05-03
+ */
+#define BEGINendCnfLoad \
+static rsRetVal endCnfLoad(modConfData_t *ptr)\
+{\
+	modConfData_t __attribute__((unused)) *pModConf = (modConfData_t*) ptr; \
+	DEFiRet;
+
+#define CODESTARTendCnfLoad
+
+#define ENDendCnfLoad \
+	RETiRet;\
+}
+
+
+/* checkCnf()
+ * Check the provided config object for errors, inconsistencies and other things
+ * that do not work out.
+ * NOTE: no part of the config must be activated, so some checks that require
+ * activation can not be done in this entry point. They must be done in the 
+ * activateConf() stage, where the caller must also be prepared for error
+ * returns.
+ * rgerhards, 2011-05-03
+ */
+#define BEGINcheckCnf \
+static rsRetVal checkCnf(modConfData_t *ptr)\
+{\
+	modConfData_t __attribute__((unused)) *pModConf = (modConfData_t*) ptr; \
+	DEFiRet;
+
+#define CODESTARTcheckCnf
+
+#define ENDcheckCnf \
+	RETiRet;\
+}
+
+
+/* activateCnfPrePrivDrop()
+ * Initial config activation, before dropping privileges. This is an optional
+ * entry points that should only be implemented by those module that really need
+ * it. Processing should be limited to the minimum possible. Main activation
+ * should happen in the normal activateCnf() call.
+ * rgerhards, 2011-05-06
+ */
+#define BEGINactivateCnfPrePrivDrop \
+static rsRetVal activateCnfPrePrivDrop(modConfData_t *ptr)\
+{\
+	modConfData_t *pModConf = (modConfData_t*) ptr; \
+	DEFiRet;
+
+#define CODESTARTactivateCnfPrePrivDrop
+
+#define ENDactivateCnfPrePrivDrop \
+	RETiRet;\
+}
+
+
+/* activateCnf()
+ * This activates the provided config, and may report errors if they are detected
+ * during activation.
+ * rgerhards, 2011-05-03
+ */
+#define BEGINactivateCnf \
+static rsRetVal activateCnf(modConfData_t *ptr)\
+{\
+	modConfData_t __attribute__((unused)) *pModConf = (modConfData_t*) ptr; \
+	DEFiRet;
+
+#define CODESTARTactivateCnf
+
+#define ENDactivateCnf \
+	RETiRet;\
+}
+
+
+/* freeCnf()
+ * This is a function tells an input module that it must free all data
+ * associated with the passed-in module config.
+ * rgerhards, 2011-05-03
+ */
+#define BEGINfreeCnf \
+static rsRetVal freeCnf(void *ptr)\
+{\
+	modConfData_t *pModConf = (modConfData_t*) ptr; \
+	DEFiRet;
+
+#define CODESTARTfreeCnf
+
+#define ENDfreeCnf \
+	if(pModConf != NULL)\
+		free(pModConf); /* we need to free this in any case */\
 	RETiRet;\
 }
 
@@ -634,7 +1074,29 @@ static rsRetVal doHUP(instanceData __attribute__((unused)) *pData)\
 }
 
 
-/* parse() - main entry point of parser modules
+/* SetShutdownImmdtPtr()
+ * This function is optional. If defined by an output plugin, it is called 
+ * each time the action is invoked to set the "ShutdownImmediate" pointer,
+ * which is used during termination to indicate the action should shutdown
+ * as quickly as possible.
+ */
+#define CODEqueryEtryPt_SetShutdownImmdtPtr \
+	else if(!strcmp((char*) name, "SetShutdownImmdtPtr")) {\
+		*pEtryPoint = SetShutdownImmdtPtr;\
+	}
+#define BEGINSetShutdownImmdtPtr \
+static rsRetVal SetShutdownImmdtPtr(instanceData __attribute__((unused)) *pData, int *pPtr)\
+{\
+	DEFiRet;
+
+#define CODESTARTSetShutdownImmdtPtr 
+
+#define ENDSetShutdownImmdtPtr \
+	RETiRet;\
+}
+
+
+/* parse() - main entry point of parser modules (v1 config interface)
  */
 #define BEGINparse \
 static rsRetVal parse(msg_t *pMsg)\
@@ -649,10 +1111,32 @@ static rsRetVal parse(msg_t *pMsg)\
 }
 
 
+/* parse2() - main entry point of parser modules (v2+ config interface)
+ */
+#define BEGINparse2 \
+static rsRetVal parse2(instanceConf_t *const pInst, msg_t *pMsg)\
+{\
+	DEFiRet;
+
+#define CODESTARTparse2 \
+	assert(pInst != NULL);\
+	assert(pMsg != NULL);
+
+#define ENDparse2 \
+	RETiRet;\
+}
+
+
 /* strgen() - main entry point of parser modules
+ * Note that we do NOT use size_t as this permits us to store the
+ * values directly into optimized heap structures.
+ * ppBuf is the buffer pointer
+ * pLenBuf is the current max size of this buffer
+ * pStrLen is an output parameter that MUST hold the length
+ *         of the generated string on exit (this is cached)
  */
 #define BEGINstrgen \
-static rsRetVal strgen(msg_t *pMsg, uchar **ppBuf, size_t *pLenBuf) \
+static rsRetVal strgen(msg_t *const pMsg, actWrkrIParams_t *const iparam) \
 {\
 	DEFiRet;
 
@@ -686,6 +1170,8 @@ static rsRetVal GetStrgenName(uchar **ppSz)\
 	return RS_RET_OK;\
 }
 
+
+#endif /* #ifndef MODULE_TEMPLATE_H_INCLUDED */
 
 /* vim:set ai:
  */

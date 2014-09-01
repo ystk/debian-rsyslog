@@ -22,7 +22,7 @@
  * NOTE: read comments in module-template.h to understand how this file
  *       works!
  *
- * Copyright 2007-2012 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -49,6 +49,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <assert.h>
+#include <pthread.h>
 #include "dirty.h"
 #include "syslogd-types.h"
 #include "module-template.h"
@@ -57,12 +58,11 @@
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("omtesting")
 
 /* internal structures
  */
 DEF_OMOD_STATIC_DATA
-
-static int bEchoStdout = 0;	/* echo non-failed messages to stdout */
 
 typedef struct _instanceData {
 	enum { MD_SLEEP, MD_FAIL, MD_RANDFAIL, MD_ALWAYS_SUSPEND }
@@ -74,13 +74,37 @@ typedef struct _instanceData {
 	int	iFailFrequency;
 	int	iResumeAfter;
 	int	iCurrRetries;
+	int	bFailed;	/* indicates if we are already in failed state - this is necessary
+	 			 * to work properly together with multiple worker instances.
+				 */
+	pthread_mutex_t mut;
 } instanceData;
+
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
+
+typedef struct configSettings_s {
+	int bEchoStdout;	/* echo non-failed messages to stdout */
+} configSettings_t;
+static configSettings_t cs;
+
+BEGINinitConfVars		/* (re)set config variables to default values */
+CODESTARTinitConfVars 
+	cs.bEchoStdout = 0;
+ENDinitConfVars
 
 BEGINcreateInstance
 CODESTARTcreateInstance
 	pData->iWaitSeconds = 1;
 	pData->iWaitUSeconds = 0;
+	pthread_mutex_init(&pData->mut, NULL);
 ENDcreateInstance
+
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINdbgPrintInstInfo
@@ -105,6 +129,7 @@ static rsRetVal doFailOnResume(instanceData *pData)
 	dbgprintf("fail retry curr %d, max %d\n", pData->iCurrRetries, pData->iResumeAfter);
 	if(++pData->iCurrRetries == pData->iResumeAfter) {
 		iRet = RS_RET_OK;
+		pData->bFailed = 0;
 	} else {
 		iRet = RS_RET_SUSPENDED;
 	}
@@ -118,12 +143,18 @@ static rsRetVal doFail(instanceData *pData)
 {
 	DEFiRet;
 
-	dbgprintf("fail curr %d, frquency %d\n", pData->iCurrCallNbr, pData->iFailFrequency);
-	if(pData->iCurrCallNbr++ % pData->iFailFrequency == 0) {
-		pData->iCurrRetries = 0;
-		iRet = RS_RET_SUSPENDED;
+	dbgprintf("fail curr %d, frequency %d, bFailed %d\n", pData->iCurrCallNbr,
+		  pData->iFailFrequency, pData->bFailed);
+	if(pData->bFailed) {
+		ABORT_FINALIZE(RS_RET_SUSPENDED);
+	} else {
+		if(pData->iCurrCallNbr++ % pData->iFailFrequency == 0) {
+			pData->iCurrRetries = 0;
+			pData->bFailed = 1;
+			iRet = RS_RET_SUSPENDED;
+		}
 	}
-
+finalize_it:
 	RETiRet;
 }
 
@@ -160,11 +191,12 @@ static rsRetVal doRandFail(void)
 BEGINtryResume
 CODESTARTtryResume
 	dbgprintf("omtesting tryResume() called\n");
-	switch(pData->mode) {
+	pthread_mutex_lock(&pWrkrData->pData->mut);
+	switch(pWrkrData->pData->mode) {
 		case MD_SLEEP:
 			break;
 		case MD_FAIL:
-			iRet = doFailOnResume(pData);
+			iRet = doFailOnResume(pWrkrData->pData);
 			break;
 		case MD_RANDFAIL:
 			iRet = doRandFail();
@@ -172,13 +204,17 @@ CODESTARTtryResume
 		case MD_ALWAYS_SUSPEND:
 			iRet = RS_RET_SUSPENDED;
 	}
+	pthread_mutex_unlock(&pWrkrData->pData->mut);
 	dbgprintf("omtesting tryResume() returns iRet %d\n", iRet);
 ENDtryResume
 
 
 BEGINdoAction
+	instanceData *pData;
 CODESTARTdoAction
 	dbgprintf("omtesting received msg '%s'\n", ppString[0]);
+	pData = pWrkrData->pData;
+	pthread_mutex_lock(&pData->mut);
 	switch(pData->mode) {
 		case MD_SLEEP:
 			iRet = doSleep(pData);
@@ -198,16 +234,20 @@ CODESTARTdoAction
 		fprintf(stdout, "%s", ppString[0]);
 		fflush(stdout);
 	}
+	pthread_mutex_unlock(&pData->mut);
 	dbgprintf(":omtesting: end doAction(), iRet %d\n", iRet);
 ENDdoAction
 
 
 BEGINfreeInstance
 CODESTARTfreeInstance
-	/* we do not have instance data, so we do not need to
-	 * do anything here. -- rgerhards, 2007-07-25
-	 */
+	pthread_mutex_destroy(&pData->mut);
 ENDfreeInstance
+
+
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 
 BEGINparseSelectorAct
@@ -287,7 +327,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 		dbgprintf("invalid mode '%s', doing 'sleep 1 0' - fix your config\n", szBuf);
 	}
 
-	pData->bEchoStdout = bEchoStdout;
+	pData->bEchoStdout = cs.bEchoStdout;
 	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, OMSR_NO_RQD_TPL_OPTS,
 				         (uchar*)"RSYSLOG_TraditionalForwardFormat"));
 
@@ -303,15 +343,18 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
+CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
 ENDqueryEtryPt
 
 
 BEGINmodInit()
 CODESTARTmodInit
+INITLegCnfVars
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionomtestingechostdout", 0, eCmdHdlrBinary, NULL,
-				   &bEchoStdout, STD_LOADABLE_MODULE_ID));
+				   &cs.bEchoStdout, STD_LOADABLE_MODULE_ID));
 	/* we seed the random-number generator in any case... */
 	srand(time(NULL));
 ENDmodInit

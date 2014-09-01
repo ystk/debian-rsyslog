@@ -6,25 +6,21 @@
  * 
  * Work on this module begun 2009-11-18 by Rainer Gerhards.
  *
- * Copyright 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2009-2014 Rainer Gerhards and Adiscon GmbH.
  *
- * This file is part of the rsyslog runtime library.
- *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 #include "config.h"
 
@@ -106,6 +102,7 @@ CODESTARTobjDestruct(nspoll)
 	 * a driver name string as load indicator (because we also need that string
 	 * to release the driver 
 	 */
+	free(pThis->pBaseDrvrName);
 	if(pThis->pDrvrName != NULL) {
 		obj.ReleaseObj(__FILE__, pThis->pDrvrName+2, DONT_LOAD_LIB, (void*) &pThis->Drvr);
 		free(pThis->pDrvrName);
@@ -129,11 +126,34 @@ finalize_it:
 /* Carries out the actual wait (all done in lower layers)
  */
 static rsRetVal
-Wait(nspoll_t *pThis, int timeout, int *idRdy, void **ppUsr) {
+Wait(nspoll_t *pThis, int timeout, int *numEntries, nsd_epworkset_t workset[]) {
 	DEFiRet;
 	ISOBJ_TYPE_assert(pThis, nspoll);
-	assert(idRdy != NULL);
-	iRet = pThis->Drvr.Wait(pThis->pDrvrData, timeout, idRdy, ppUsr);
+	assert(workset != NULL);
+	iRet = pThis->Drvr.Wait(pThis->pDrvrData, timeout, numEntries, workset);
+	RETiRet;
+}
+
+
+/* set the base driver name. If the driver name
+ * is set to NULL, the previously set name is deleted but
+ * no name set again (which results in the system default being
+ * used)-- rgerhards, 2008-05-05
+ */
+static rsRetVal
+SetDrvrName(nspoll_t *pThis, uchar *pszName)
+{
+	DEFiRet;
+	ISOBJ_TYPE_assert(pThis, netstrms);
+	if(pThis->pBaseDrvrName != NULL) {
+		free(pThis->pBaseDrvrName);
+		pThis->pBaseDrvrName = NULL;
+	}
+
+	if(pszName != NULL) {
+		CHKmalloc(pThis->pBaseDrvrName = (uchar*) strdup((char*) pszName));
+	}
+finalize_it:
 	RETiRet;
 }
 
@@ -164,6 +184,7 @@ CODESTARTobjQueryInterface(nspoll)
 	 */
 	pIf->Construct = nspollConstruct;
 	pIf->ConstructFinalize = ConstructFinalize;
+	pIf->SetDrvrName = SetDrvrName;
 	pIf->Destruct = nspollDestruct;
 	pIf->Wait = Wait;
 	pIf->Ctl = Ctl;

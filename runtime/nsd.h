@@ -27,6 +27,16 @@
 
 #include <sys/socket.h>
 
+/**
+ * The following structure is a set of descriptors that need to be processed.
+ * This set will be the result of the epoll call and be used
+ * in the actual request processing stage. -- rgerhards, 2011-01-24
+ */
+struct nsd_epworkset_s {
+	int id;
+	void *pUsr;
+};
+
 enum nsdsel_waitOp_e {
 	NSDSEL_RD = 1,
 	NSDSEL_WR = 2,
@@ -49,11 +59,11 @@ BEGINinterface(nsd) /* name must also be changed in ENDinterface macro! */
 			     uchar *pLstnPort, uchar *pLstnIP, int iSessMax);
 	rsRetVal (*AcceptConnReq)(nsd_t *pThis, nsd_t **ppThis);
 	rsRetVal (*GetRemoteHName)(nsd_t *pThis, uchar **pszName);
-	rsRetVal (*GetRemoteIP)(nsd_t *pThis, uchar **pszIP);
+	rsRetVal (*GetRemoteIP)(nsd_t *pThis, prop_t **ip);
 	rsRetVal (*SetMode)(nsd_t *pThis, int mode); /* sets a driver specific mode - see driver doc for details */
 	rsRetVal (*SetAuthMode)(nsd_t *pThis, uchar*); /* sets a driver specific mode - see driver doc for details */
 	rsRetVal (*SetPermPeers)(nsd_t *pThis, permittedPeers_t*); /* sets driver permitted peers for auth needs */
-	void     (*CheckConnection)(nsd_t *pThis);	/* This is a trick mostly for plain tcp syslog */
+	rsRetVal (*CheckConnection)(nsd_t *pThis);	/* This is a trick mostly for plain tcp syslog */
 	rsRetVal (*GetSock)(nsd_t *pThis, int *pSock);
 	rsRetVal (*SetSock)(nsd_t *pThis, int sock);
 	/* GetSock() and SetSock() return an error if the driver does not use plain
@@ -70,9 +80,11 @@ BEGINinterface(nsd) /* name must also be changed in ENDinterface macro! */
 	/* v5 */
 	rsRetVal (*EnableKeepAlive)(nsd_t *pThis);
 ENDinterface(nsd)
-#define nsdCURR_IF_VERSION 5 /* increment whenever you change the interface structure! */
+#define nsdCURR_IF_VERSION 7 /* increment whenever you change the interface structure! */
 /* interface version 4 added GetRemAddr()
  * interface version 5 added EnableKeepAlive() -- rgerhards, 2009-06-02
+ * interface version 6 changed return of CheckConnection from void to rsRetVal -- alorbach, 2012-09-06
+ * interface version 7 changed signature ofGetRempoteIP() -- rgerhards, 2013-01-21
  */
 
 /* interface  for the select call */
@@ -90,7 +102,7 @@ BEGINinterface(nsdpoll) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*Construct)(nsdpoll_t **ppThis);
 	rsRetVal (*Destruct)(nsdpoll_t **ppThis);
 	rsRetVal (*Ctl)(nsdpoll_t *pNsdpoll, nsd_t *pNsd, int id, void *pUsr, int mode, int op);
-	rsRetVal (*Wait)(nsdpoll_t *pNsdpoll, int timeout, int *idRdy, void **ppUsr);
+	rsRetVal (*Wait)(nsdpoll_t *pNsdpoll, int timeout, int *numReady, nsd_epworkset_t workset[]);
 ENDinterface(nsdpoll)
 #define nsdpollCURR_IF_VERSION 1 /* increment whenever you change the interface structure! */
 

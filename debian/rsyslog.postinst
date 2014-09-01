@@ -16,17 +16,17 @@ set -e
 
 case "$1" in
     configure)
-	# Update init script priorities
-	if dpkg --compare-versions "$2" lt "3.20.2-1"; then
-		for i in 0 6 ; do
-			if [ -e /etc/rc$i.d/K90rsyslog ]; then
-				mv /etc/rc$i.d/K90rsyslog /etc/rc$i.d/S30rsyslog
-			fi
-		done
-	fi
-	# /run transition (see #633036)
+	# /run transition (Bug: #633036)
 	if dpkg --compare-versions "$2" lt "5.8.2-2"; then
 		rm -f /lib/init/rw/sendsigs.omit.d/rsyslog
+	fi
+
+	# Fix permissions of the spool/work directory (Bug: #693099)
+	chmod 700 /var/spool/rsyslog
+
+	# Clean up temporary syslog.service symlink
+	if [ -d /run/systemd/system ] &&  dpkg --compare-versions "$2" lt-nl "7.4.1-2" ; then
+		rm -f /run/systemd/system/syslog.service
 	fi
     ;;
 
@@ -39,7 +39,4 @@ case "$1" in
     ;;
 esac
 
-
 #DEBHELPER#
-
-exit 0

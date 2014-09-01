@@ -5,7 +5,7 @@
  * yet a runtime library, because it depends on some functionality
  * residing somewhere else.
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -27,26 +27,18 @@
 #ifndef	DIRTY_H_INCLUDED
 #define	DIRTY_H_INCLUDED 1
 
-rsRetVal multiSubmitMsg(multi_submit_t *pMultiSub);
-rsRetVal submitMsg(msg_t *pMsg);
-rsRetVal logmsgInternal(int iErr, int pri, uchar *msg, int flags);
-rsRetVal parseAndSubmitMessage(uchar *hname, uchar *hnameIP, uchar *msg, int len, int flags, flowControl_t flowCtlTypeu, prop_t *pInputName, struct syslogTime *stTime, time_t ttGenTime);
-rsRetVal diagGetMainMsgQSize(int *piSize); /* for imdiag */
-rsRetVal createMainQueue(qqueue_t **ppQueue, uchar *pszQueueName);
+rsRetVal __attribute__((deprecated)) multiSubmitMsg(multi_submit_t *pMultiSub);
+rsRetVal multiSubmitMsg2(multi_submit_t *pMultiSub); /* friends only! */
+rsRetVal submitMsg2(msg_t *pMsg);
+rsRetVal __attribute__((deprecated)) submitMsg(msg_t *pMsg);
+rsRetVal multiSubmitFlush(multi_submit_t *pMultiSub);
+rsRetVal logmsgInternal(const int iErr, const int pri, const uchar *const msg, int flags);
+rsRetVal __attribute__((deprecated)) parseAndSubmitMessage(uchar *hname, uchar *hnameIP, uchar *msg, int len, int flags, flowControl_t flowCtlTypeu, prop_t *pInputName, struct syslogTime *stTime, time_t ttGenTime, ruleset_t *pRuleset);
+rsRetVal createMainQueue(qqueue_t **ppQueue, uchar *pszQueueName, struct nvlst *lst);
+rsRetVal startMainQueue(qqueue_t *pQueue);
 
-/* Intervals at which we flush out "message repeated" messages,
- * in seconds after previous message is logged.  After each flush,
- * we move to the next interval until we reach the largest.
- * TODO: move this to action object! Only action.c and syslogd.c use it.
- */
-extern int bActExecWhenPrevSusp;
 extern int MarkInterval;
-extern int repeatinterval[2];
-extern int  bReduceRepeatMsgs;
 extern qqueue_t *pMsgQueue;				/* the main message queue */
-#define	MAXREPEAT ((int)((sizeof(repeatinterval) / sizeof(repeatinterval[0])) - 1))
-#define	REPEATTIME(f)	((f)->f_time + repeatinterval[(f)->f_repeatcount])
-#define	BACKOFF(f)	{ if (++(f)->f_repeatcount > MAXREPEAT) \
-				 (f)->f_repeatcount = MAXREPEAT; \
-			}
+extern int iConfigVerify;				/* is this just a config verify run? */
+extern int bHaveMainQueue;
 #endif /* #ifndef DIRTY_H_INCLUDED */

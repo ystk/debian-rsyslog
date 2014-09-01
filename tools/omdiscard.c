@@ -6,7 +6,7 @@
  *
  * File begun on 2007-07-24 by RGerhards
  *
- * Copyright 2007-2012 Adiscon GmbH.
+ * Copyright 2007-2013 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -35,6 +35,7 @@
 #include "syslogd-types.h"
 #include "omdiscard.h"
 #include "module-template.h"
+#include "errmsg.h"
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
@@ -42,16 +43,26 @@ MODULE_TYPE_NOKEEP
 /* internal structures
  */
 DEF_OMOD_STATIC_DATA
+DEFobjCurrIf(errmsg);
 
 typedef struct _instanceData {
-    	char dummy;
+	EMPTY_STRUCT
 } instanceData;
+
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
 
 /* we do not need a createInstance()!
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
 */
+
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINdbgPrintInstInfo
@@ -85,6 +96,11 @@ CODESTARTfreeInstance
 ENDfreeInstance
 
 
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
+
+
 BEGINparseSelectorAct
 CODESTARTparseSelectorAct
 CODE_STD_STRING_REQUESTparseSelectorAct(0)
@@ -92,8 +108,10 @@ CODE_STD_STRING_REQUESTparseSelectorAct(0)
 	p = *pp;
 
 	if(*p == '~') {
-		/* TODO: check the rest of the selector line - error reporting */
 		dbgprintf("discard\n");
+		errmsg.LogError(0, RS_RET_DEPRECATED, "warning: ~ action "
+			"is deprecated, consider using the 'stop' "
+			"statement instead");
 	} else {
 		iRet = RS_RET_CONFLINE_UNPROCESSED;
 	}
@@ -103,12 +121,14 @@ ENDparseSelectorAct
 
 BEGINmodExit
 CODESTARTmodExit
+	objRelease(errmsg, CORE_COMPONENT);
 ENDmodExit
 
 
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
 ENDqueryEtryPt
 
 
@@ -116,6 +136,7 @@ BEGINmodInit(Discard)
 CODESTARTmodInit
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
+	CHKiRet(objUse(errmsg, CORE_COMPONENT));
 ENDmodInit
 /*
  * vi:set ai:

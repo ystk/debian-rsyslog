@@ -4,17 +4,26 @@ Priority: important
 Maintainer: Michael Biebl <biebl@debian.org>
 Build-Depends: debhelper (>= 8),
                dpkg-dev (>= 1.16.1),
-               autotools-dev (>= 20100122.1),
+               dh-autoreconf,
+               dh-systemd (>= 1.4),
                zlib1g-dev,
                libmysqlclient-dev,
                libpq-dev,
+               libmongo-client-dev (>= 0.1.4),
+               libcurl4-gnutls-dev,
                libkrb5-dev,
-               libgnutls-dev,
-               librelp-dev,
-               pkg-config
-Standards-Version: 3.9.3
-Vcs-Git: git://git.debian.org/git/collab-maint/rsyslog.git
-Vcs-Browser: http://git.debian.org/?p=collab-maint/rsyslog.git;a=summary
+               libgnutls28-dev,
+               librelp-dev (>= 1.2.5),
+               libestr-dev (>= 0.1.9),
+               liblognorm-dev (>= 1.0.0),
+               liblogging-stdlog-dev (>= 1.0.3),
+               libjson-c-dev,
+               uuid-dev,
+               pkg-config,
+               bison
+Standards-Version: 3.9.5
+Vcs-Git: git://anonscm.debian.org/collab-maint/rsyslog.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=collab-maint/rsyslog.git;a=summary
 Homepage: http://www.rsyslog.com/
 
 Package: rsyslog
@@ -30,6 +39,7 @@ Depends: ${shlibs:Depends},
          initscripts (>= 2.88dsf-13.3)
 Recommends: logrotate
 Suggests: rsyslog-mysql | rsyslog-pgsql,
+          rsyslog-mongodb,
           rsyslog-doc,
           rsyslog-gnutls,
           rsyslog-gssapi,
@@ -50,22 +60,6 @@ Description: reliable system and kernel logging daemon
  .
  It is the default syslogd on Debian systems.
 
-Package: rsyslog-doc
-Section: doc
-Priority: extra
-Architecture: all
-Breaks: rsyslog (<< 2.0.1-2)
-Replaces: rsyslog (<< 2.0.1-2)
-Depends: ${misc:Depends}
-Suggests: doc-base,
-          www-browser
-Description: documentation for rsyslog
- This package contains detailed HTML documentation for rsyslog.
- .
- It describes the general configuration file syntax for filters, actions,
- templates, etc, and has detailed information for all available configuration
- directives.
-
 Package: rsyslog-mysql
 Architecture: any
 Priority: extra
@@ -77,7 +71,7 @@ Depends: ${shlibs:Depends},
 Recommends: mysql-client
 Suggests: mysql-server
 Description: MySQL output plugin for rsyslog
- This plugin allows rsyslog to write the syslog messages into a MySQL database.
+ This plugin allows rsyslog to write syslog messages into a MySQL database.
 
 Package: rsyslog-pgsql
 Architecture: any
@@ -90,8 +84,30 @@ Depends: ${shlibs:Depends},
 Recommends: postgresql-client
 Suggests: postgresql
 Description: PostgreSQL output plugin for rsyslog
- This plugin allows rsyslog to write the syslog messages into a PostgreSQL
+ This plugin allows rsyslog to write syslog messages into a PostgreSQL
  database.
+
+Package: rsyslog-mongodb
+Architecture: any
+Priority: extra
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version}),
+Recommends: mongodb-server
+Description: MongoDB output plugin for rsyslog
+ This plugin allows rsyslog to write syslog messages to MongoDB, a
+ scalable, high-performance, open source NoSQL database.
+
+Package: rsyslog-elasticsearch
+Architecture: any
+Priority: extra
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         rsyslog (= ${binary:Version}),
+Description: Elasticsearch output plugin for rsyslog
+ This plugin allows rsyslog to write syslog messages to Elasticsearch, a
+ distributed, multitenant-capable full-text search engine with a RESTful web
+ interface and schema-free JSON documents.
 
 Package: rsyslog-gssapi
 Architecture: any
@@ -123,6 +139,6 @@ Depends: ${shlibs:Depends},
          ${misc:Depends},
          rsyslog (= ${binary:Version})
 Description: RELP protocol support for rsyslog
- These plugins allows rsyslog to send and receive syslog messages via the
+ These plugins allow rsyslog to send and receive syslog messages via the
  RELP protocol. RELP ensures reliable transport over the network even on
  connection loss or if a peer becomes unavailable.

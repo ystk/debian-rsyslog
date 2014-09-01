@@ -46,6 +46,7 @@
 
 MODULE_TYPE_INPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("immark")
 
 /* defines */
 #define DEFAULT_MARK_PERIOD (20 * 60)
@@ -53,13 +54,118 @@ MODULE_TYPE_NOKEEP
 /* Module static data */
 DEF_IMOD_STATIC_DATA
 DEFobjCurrIf(glbl)
+DEFobjCurrIf(errmsg)
+
 static int iMarkMessagePeriod = DEFAULT_MARK_PERIOD;
+struct modConfData_s {
+	rsconf_t *pConf;	/* our overall config object */
+	int iMarkMessagePeriod;
+	sbool configSetViaV2Method;
+};
+
+/* module-global parameters */
+static struct cnfparamdescr modpdescr[] = {
+	{ "interval", eCmdHdlrInt, 0 }
+};
+static struct cnfparamblk modpblk =
+	{ CNFPARAMBLK_VERSION,
+	  sizeof(modpdescr)/sizeof(struct cnfparamdescr),
+	  modpdescr
+	};
+
+
+static modConfData_t *loadModConf = NULL;/* modConf ptr to use for the current load process */
+static int bLegacyCnfModGlobalsPermitted;/* are legacy module-global config parameters permitted? */
+
 
 BEGINisCompatibleWithFeature
 CODESTARTisCompatibleWithFeature
 	if(eFeat == sFEATURENonCancelInputTermination)
 		iRet = RS_RET_OK;
 ENDisCompatibleWithFeature
+
+
+BEGINafterRun
+CODESTARTafterRun
+ENDafterRun
+
+
+BEGINbeginCnfLoad
+CODESTARTbeginCnfLoad
+	loadModConf = pModConf;
+	pModConf->pConf = pConf;
+	/* init our settings */
+	pModConf->iMarkMessagePeriod = DEFAULT_MARK_PERIOD;
+	loadModConf->configSetViaV2Method = 0;
+	bLegacyCnfModGlobalsPermitted = 1;
+ENDbeginCnfLoad
+
+
+BEGINsetModCnf
+	struct cnfparamvals *pvals = NULL;
+	int i;
+CODESTARTsetModCnf
+	pvals = nvlstGetParams(lst, &modpblk, NULL);
+	if(pvals == NULL) {
+		errmsg.LogError(0, RS_RET_MISSING_CNFPARAMS, "error processing module "
+				"config parameters [module(...)]");
+		ABORT_FINALIZE(RS_RET_MISSING_CNFPARAMS);
+	}
+
+	if(Debug) {
+		dbgprintf("module (global) param blk for imuxsock:\n");
+		cnfparamsPrint(&modpblk, pvals);
+	}
+
+	for(i = 0 ; i < modpblk.nParams ; ++i) {
+		if(!pvals[i].bUsed)
+			continue;
+		if(!strcmp(modpblk.descr[i].name, "interval")) {
+			loadModConf->iMarkMessagePeriod = (int) pvals[i].val.d.n;
+		} else {
+			dbgprintf("imuxsock: program error, non-handled "
+			  "param '%s' in beginCnfLoad\n", modpblk.descr[i].name);
+		}
+	}
+
+	/* disable legacy module-global config directives */
+	bLegacyCnfModGlobalsPermitted = 0;
+	loadModConf->configSetViaV2Method = 1;
+
+finalize_it:
+	if(pvals != NULL)
+		cnfparamvalsDestruct(pvals, &modpblk);
+ENDsetModCnf
+
+
+BEGINendCnfLoad
+CODESTARTendCnfLoad
+	if(!loadModConf->configSetViaV2Method) {
+		pModConf->iMarkMessagePeriod = iMarkMessagePeriod;
+	}
+ENDendCnfLoad
+
+
+BEGINcheckCnf
+CODESTARTcheckCnf
+	if(pModConf->iMarkMessagePeriod == 0) {
+		errmsg.LogError(0, NO_ERRCODE, "immark: mark message period must not be 0, can not run");
+		ABORT_FINALIZE(RS_RET_NO_RUN);	/* we can not run with this error */
+	}
+finalize_it:
+ENDcheckCnf
+
+
+BEGINactivateCnf
+CODESTARTactivateCnf
+	MarkInterval = pModConf->iMarkMessagePeriod;
+	DBGPRINTF("immark set MarkInterval to %d\n", MarkInterval);
+ENDactivateCnf
+
+
+BEGINfreeCnf
+CODESTARTfreeCnf
+ENDfreeCnf
 
 
 /* This function is called to gather input. It must terminate only
@@ -81,46 +187,39 @@ CODESTARTrunInput
 	 * right into the sleep below.
 	 */
 	while(1) {
-		srSleep(iMarkMessagePeriod, 0); /* seconds, micro seconds */
+		srSleep(MarkInterval, 0); /* seconds, micro seconds */
 
 		if(glbl.GetGlobalInputTermState() == 1)
 			break; /* terminate input! */
 
 		dbgprintf("immark: injecting mark message\n");
-		logmsgInternal(NO_ERRCODE, LOG_INFO, (uchar*)"-- MARK --", MARK);
+		logmsgInternal(NO_ERRCODE, LOG_SYSLOG|LOG_INFO, (uchar*)"-- MARK --", MARK);
 	}
 ENDrunInput
 
 
 BEGINwillRun
 CODESTARTwillRun
-	/* We set the global MarkInterval to what is configured here -- rgerhards, 2008-07-15 */
-	MarkInterval = iMarkMessagePeriod;
-	if(iMarkMessagePeriod == 0)
-		iRet = RS_RET_NO_RUN;
 ENDwillRun
-
-
-BEGINafterRun
-CODESTARTafterRun
-ENDafterRun
 
 
 BEGINmodExit
 CODESTARTmodExit
+	objRelease(errmsg, CORE_COMPONENT);
 ENDmodExit
 
 
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_IMOD_QUERIES
+CODEqueryEtryPt_STD_CONF2_QUERIES
+CODEqueryEtryPt_STD_CONF2_setModCnf_QUERIES
 CODEqueryEtryPt_IsCompatibleWithFeature_IF_OMOD_QUERIES
 ENDqueryEtryPt
 
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
 {
 	iMarkMessagePeriod = DEFAULT_MARK_PERIOD;
-
 	return RS_RET_OK;
 }
 
@@ -129,8 +228,13 @@ CODESTARTmodInit
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(glbl, CORE_COMPONENT));
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"markmessageperiod", 0, eCmdHdlrInt, NULL, &iMarkMessagePeriod, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
+	CHKiRet(objUse(errmsg, CORE_COMPONENT));
+
+	/* legacy config handlers */
+	CHKiRet(regCfSysLineHdlr2((uchar *)"markmessageperiod", 0, eCmdHdlrInt, NULL,
+		&iMarkMessagePeriod, STD_LOADABLE_MODULE_ID, &bLegacyCnfModGlobalsPermitted));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler,
+		resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
 ENDmodInit
 /* vi:set ai:
  */

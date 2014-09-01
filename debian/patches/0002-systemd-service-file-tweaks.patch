@@ -1,0 +1,33 @@
+From: Michael Biebl <biebl@debian.org>
+Date: Wed, 20 Aug 2014 19:28:41 +0200
+Subject: systemd service file tweaks
+
+- Add Documentation field, pointing to the rsyslogd(8) man page and the
+  rsyslog website [1].
+- Restart rsyslogd daemon on failures [2].
+
+[1] http://www.freedesktop.org/software/systemd/man/systemd.unit.html#Documentation=
+[2] http://www.freedesktop.org/software/systemd/man/systemd.service.html#Restart=
+---
+ rsyslog.service.in | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/rsyslog.service.in b/rsyslog.service.in
+index 8e2d64c..cb629ee 100644
+--- a/rsyslog.service.in
++++ b/rsyslog.service.in
+@@ -1,11 +1,14 @@
+ [Unit]
+ Description=System Logging Service
+ Requires=syslog.socket
++Documentation=man:rsyslogd(8)
++Documentation=http://www.rsyslog.com/doc/
+ 
+ [Service]
+ Type=notify
+ ExecStart=@sbindir@/rsyslogd -n
+ StandardOutput=null
++Restart=on-failure
+ 
+ [Install]
+ WantedBy=multi-user.target

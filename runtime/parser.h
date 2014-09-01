@@ -21,7 +21,6 @@
 #ifndef INCLUDED_PARSER_H
 #define INCLUDED_PARSER_H
 
-
 /* we create a small helper object, a list of parsers, that we can use to
  * build a chain of them whereever this is needed (initially thought to be
  * used in ruleset.c as well as ourselvs).
@@ -37,6 +36,7 @@ struct parser_s {
 	BEGINobjInstance;	/* Data to implement generic object - MUST be the first data element! */
 	uchar *pName;		/* name of this parser */
 	modInfo_t *pModule;	/* pointer to parser's module */
+	void *pInst;		/* instance data for the parser (v2+ module interface) */
 	sbool bDoSanitazion;	/* do standard message sanitazion before calling parser? */
 	sbool bDoPRIParsing;	/* do standard PRI parsing before calling parser? */
 };
@@ -62,9 +62,11 @@ BEGINinterface(parser) /* name must also be changed in ENDinterface macro! */
 ENDinterface(parser)
 #define parserCURR_IF_VERSION 1 /* increment whenever you change the interface above! */
 
+void printParserList(parserList_t *pList);
 
 /* prototypes */
 PROTOTYPEObj(parser);
+rsRetVal parserConstructViaModAndName(modInfo_t *pMod, uchar *const pName, void *parserInst);
 
 
 #endif /* #ifndef INCLUDED_PARSER_H */

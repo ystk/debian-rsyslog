@@ -4,7 +4,7 @@
  * NOTE: read comments in module-template.h to understand how this file
  *       works!
  *
- * Copyright 2007, 2008 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -59,7 +59,10 @@
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("omgssapi")
 
+
+static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal);
 
 /* internal structures
  */
@@ -85,13 +88,24 @@ typedef struct _instanceData {
 	OM_uint32 gss_flags;
 } instanceData;
 
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
+
 /* config data */
-static uchar	*pszTplName = NULL; /* name of the default template to use */
-static char *gss_base_service_name = NULL;
-static enum gss_mode_t {
+
+typedef enum gss_mode_e {
 	GSSMODE_MIC,
 	GSSMODE_ENC
-} gss_mode = GSSMODE_ENC;
+} gss_mode_t;
+
+static struct configSettings_s {
+	uchar	*pszTplName; /* name of the default template to use */
+	char *gss_base_service_name;
+	gss_mode_t gss_mode;
+} cs;
+
+static pthread_mutex_t mutDoAct = PTHREAD_MUTEX_INITIALIZER;
 
 /* get the syslog forward port from selector_t. The passed in
  * struct must be one that is setup for forwarding.
@@ -111,6 +125,11 @@ static char *getFwdSyslogPt(instanceData *pData)
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
+
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINisCompatibleWithFeature
@@ -142,10 +161,8 @@ CODESTARTfreeInstance
 	/* this is meant to be done when module is unloaded,
 	   but since this module is static...
 	*/
-	if (gss_base_service_name != NULL) {
-		free(gss_base_service_name);
-		gss_base_service_name = NULL;
-	}
+	free(cs.gss_base_service_name);
+	cs.gss_base_service_name = NULL;
 
 	/* final cleanup */
 	tcpclt.Destruct(&pData->pTCPClt);
@@ -156,6 +173,9 @@ CODESTARTfreeInstance
 		free(pData->f_hname);
 ENDfreeInstance
 
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 BEGINdbgPrintInstInfo
 CODESTARTdbgPrintInstInfo
@@ -192,7 +212,7 @@ static rsRetVal TCPSendGSSInit(void *pvData)
 	if(pData->sock > 0)
 		ABORT_FINALIZE(RS_RET_OK);
 
-	base = (gss_base_service_name == NULL) ? "host" : gss_base_service_name;
+	base = (cs.gss_base_service_name == NULL) ? "host" : cs.gss_base_service_name;
 	out_tok.length = strlen(pData->f_hname) + strlen(base) + 2;
 	CHKmalloc(out_tok.value = MALLOC(out_tok.length));
 	strcpy(out_tok.value, base);
@@ -216,10 +236,10 @@ static rsRetVal TCPSendGSSInit(void *pvData)
 
 	sess_flags = &pData->gss_flags;
 	*sess_flags = GSS_C_MUTUAL_FLAG;
-	if (gss_mode == GSSMODE_MIC) {
+	if (cs.gss_mode == GSSMODE_MIC) {
 		*sess_flags |= GSS_C_INTEG_FLAG;
 	}
-	if (gss_mode == GSSMODE_ENC) {
+	if (cs.gss_mode == GSSMODE_ENC) {
 		*sess_flags |= GSS_C_CONF_FLAG;
 	}
 	dbgprintf("GSS-API requested context flags:\n");
@@ -300,7 +320,7 @@ static rsRetVal TCPSendGSSSend(void *pvData, char *msg, size_t len)
 	context = &pData->gss_context;
 	in_buf.value = msg;
 	in_buf.length = len;
-	maj_stat = gss_wrap(&min_stat, *context, (gss_mode == GSSMODE_ENC) ? 1 : 0, GSS_C_QOP_DEFAULT,
+	maj_stat = gss_wrap(&min_stat, *context, (cs.gss_mode == GSSMODE_ENC) ? 1 : 0, GSS_C_QOP_DEFAULT,
 			    &in_buf, NULL, &out_buf);
 	if (maj_stat != GSS_S_COMPLETE) {
 		gssutil.display_status("wrapping message", maj_stat, min_stat);
@@ -372,14 +392,19 @@ static rsRetVal doTryResume(instanceData *pData)
 
 BEGINtryResume
 CODESTARTtryResume
-	iRet = doTryResume(pData);
+	pthread_mutex_lock(&mutDoAct);
+	iRet = doTryResume(pWrkrData->pData);
+	pthread_mutex_unlock(&mutDoAct);
 ENDtryResume
 
 BEGINdoAction
 	char *psz = NULL; /* temporary buffering */
 	register unsigned l;
 	int iMaxLine;
+	instanceData *pData;
 CODESTARTdoAction
+	pthread_mutex_lock(&mutDoAct);
+	pData = pWrkrData->pData;
 	switch (pData->eDestState) {
 	case eDestFORW_SUSP:
 		dbgprintf("internal error in omgssapi.c, eDestFORW_SUSP in doAction()!\n");
@@ -458,6 +483,7 @@ finalize_it:
 		free(psz);
 	}
 #	endif
+	pthread_mutex_unlock(&mutDoAct);
 ENDdoAction
 
 
@@ -602,7 +628,7 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 
 	/* process template */
 	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, OMSR_NO_RQD_TPL_OPTS,
-			(pszTplName == NULL) ? (uchar*)"RSYSLOG_TraditionalForwardFormat" : pszTplName));
+			(cs.pszTplName == NULL) ? (uchar*)"RSYSLOG_TraditionalForwardFormat" : cs.pszTplName));
 
 	/* first set the pData->eDestState */
 	memset(&hints, 0, sizeof(hints));
@@ -639,9 +665,9 @@ CODESTARTmodExit
 	objRelease(gssutil, LM_GSSUTIL_FILENAME);
 	objRelease(tcpclt, LM_TCPCLT_FILENAME);
 
-	if(pszTplName != NULL) {
-		free(pszTplName);
-		pszTplName = NULL;
+	if(cs.pszTplName != NULL) {
+		free(cs.pszTplName);
+		cs.pszTplName = NULL;
 	}
 ENDmodExit
 
@@ -649,6 +675,7 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
 ENDqueryEtryPt
 
 
@@ -658,10 +685,10 @@ static rsRetVal setGSSMode(void __attribute__((unused)) *pVal, uchar *mode)
 	DEFiRet;
 
 	if (!strcmp((char *) mode, "integrity")) {
-		gss_mode = GSSMODE_MIC;
+		cs.gss_mode = GSSMODE_MIC;
 		dbgprintf("GSS-API gssmode set to GSSMODE_MIC\n");
 	} else if (!strcmp((char *) mode, "encryption")) {
-		gss_mode = GSSMODE_ENC;
+		cs.gss_mode = GSSMODE_ENC;
 		dbgprintf("GSS-API gssmode set to GSSMODE_ENC\n");
 	} else {
 		errmsg.LogError(0, RS_RET_INVALID_PARAMS, "unknown gssmode parameter: %s", (char *) mode);
@@ -675,15 +702,11 @@ static rsRetVal setGSSMode(void __attribute__((unused)) *pVal, uchar *mode)
 
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
 {
-	gss_mode = GSSMODE_ENC;
-	if (gss_base_service_name != NULL) {
-		free(gss_base_service_name);
-		gss_base_service_name = NULL;
-	}
-	if(pszTplName != NULL) {
-		free(pszTplName);
-		pszTplName = NULL;
-	}
+	cs.gss_mode = GSSMODE_ENC;
+	free(cs.gss_base_service_name);
+	cs.gss_base_service_name = NULL;
+	free(cs.pszTplName);
+	cs.pszTplName = NULL;
 	return RS_RET_OK;
 }
 
@@ -697,9 +720,9 @@ CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(gssutil, LM_GSSUTIL_FILENAME));
 	CHKiRet(objUse(tcpclt, LM_TCPCLT_FILENAME));
 
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"gssforwardservicename", 0, eCmdHdlrGetWord, NULL, &gss_base_service_name, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"gssmode", 0, eCmdHdlrGetWord, setGSSMode, &gss_mode, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actiongssforwarddefaulttemplate", 0, eCmdHdlrGetWord, NULL, &pszTplName, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"gssforwardservicename", 0, eCmdHdlrGetWord, NULL, &cs.gss_base_service_name, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"gssmode", 0, eCmdHdlrGetWord, setGSSMode, &cs.gss_mode, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actiongssforwarddefaulttemplate", 0, eCmdHdlrGetWord, NULL, &cs.pszTplName, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
 ENDmodInit
 

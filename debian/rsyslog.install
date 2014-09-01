@@ -17,9 +17,15 @@ usr/lib/rsyslog/lmstrmsrv.so
 usr/lib/rsyslog/lmtcpclt.so
 usr/lib/rsyslog/lmtcpsrv.so
 usr/lib/rsyslog/lmzlibw.so
+usr/lib/rsyslog/mmanon.so
+usr/lib/rsyslog/mmexternal.so
+usr/lib/rsyslog/mmnormalize.so
+usr/lib/rsyslog/mmjsonparse.so
+usr/lib/rsyslog/mmutf8fix.so
+usr/lib/rsyslog/mmpstrucdata.so
+usr/lib/rsyslog/mmsequence.so
 usr/lib/rsyslog/ommail.so
 usr/lib/rsyslog/omprog.so
 usr/lib/rsyslog/omuxsock.so
-usr/lib/rsyslog/omruleset.so
 usr/lib/rsyslog/pm*.so
 lib/systemd/system/rsyslog.service

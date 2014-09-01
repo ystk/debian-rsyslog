@@ -10,7 +10,7 @@
  *
  * File begun on 2008-02-14 by RGerhards (extracted from syslogd.c)
  *
- * Copyright 2008-2012 Adiscon GmbH.
+ * Copyright 2008-2013 Adiscon GmbH.
  *
  * This file is part of rsyslog.
  *
@@ -48,9 +48,14 @@
 #include "module-template.h"
 #include "debug.h"
 #include "errmsg.h"
+#include "conf.h"
+
+#undef HAVE_DBI_TXSUPP
+#warning transaction support disabled in v8 -- TODO: reenable
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("omlibdbi")
 
 /* internal structures
  */
@@ -59,6 +64,7 @@ DEFobjCurrIf(errmsg)
 static int bDbiInitialized = 0;	/* dbi_initialize() can only be called one - this keeps track of it */
 
 typedef struct _instanceData {
+	uchar *dbiDrvrDir;	/* where do the dbi drivers reside? */
 	dbi_conn conn;		/* handle to database */
 	uchar *drvrName;	/* driver to use */
 	uchar *host;		/* host to connect to */
@@ -66,16 +72,91 @@ typedef struct _instanceData {
 	uchar *pwd;		/* password for connect */
 	uchar *dbName;		/* database to use */
 	unsigned uLastDBErrno;	/* last errno returned by libdbi or 0 if all is well */
+	uchar	*tplName;       /* format template to use */
+	int txSupport;		/* transaction support */
 } instanceData;
+
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
+
+typedef struct configSettings_s {
+	uchar *dbiDrvrDir;	/* global: where do the dbi drivers reside? */
+	uchar *drvrName;	/* driver to use */
+	uchar *host;		/* host to connect to */
+	uchar *usrName;		/* user name for connect */
+	uchar *pwd;		/* password for connect */
+	uchar *dbName;		/* database to use */
+} configSettings_t;
+static configSettings_t cs;
+uchar	*pszFileDfltTplName; /* name of the default template to use */
+
+struct modConfData_s {
+	rsconf_t *pConf;	/* our overall config object */
+	uchar *dbiDrvrDir;	/* where do the dbi drivers reside? */
+	uchar 	*tplName;	/* default template */
+};
+
+static modConfData_t *loadModConf = NULL;/* modConf ptr to use for the current load process */
+static modConfData_t *runModConf = NULL;/* modConf ptr to use for the current exec process */
+static int bLegacyCnfModGlobalsPermitted;/* are legacy module-global config parameters permitted? */
+
+static pthread_mutex_t mutDoAct = PTHREAD_MUTEX_INITIALIZER;
+
+
+/* tables for interfacing with the v6 config system */
+/* module-global parameters */
+static struct cnfparamdescr modpdescr[] = {
+	{ "template", eCmdHdlrGetWord, 0 },
+	{ "driverdirectory", eCmdHdlrGetWord, 0 }
+};
+static struct cnfparamblk modpblk =
+	{ CNFPARAMBLK_VERSION,
+	  sizeof(modpdescr)/sizeof(struct cnfparamdescr),
+	  modpdescr
+	};
+/* action (instance) parameters */
+static struct cnfparamdescr actpdescr[] = {
+	{ "server", eCmdHdlrGetWord, 1 },
+	{ "db", eCmdHdlrGetWord, 1 },
+	{ "uid", eCmdHdlrGetWord, 1 },
+	{ "pwd", eCmdHdlrGetWord, 1 },
+	{ "driver", eCmdHdlrGetWord, 1 },
+	{ "template", eCmdHdlrGetWord, 0 }
+};
+static struct cnfparamblk actpblk =
+	{ CNFPARAMBLK_VERSION,
+	  sizeof(actpdescr)/sizeof(struct cnfparamdescr),
+	  actpdescr
+	};
+
+/* this function gets the default template. It coordinates action between
+ * old-style and new-style configuration parts.
+ */
+static inline uchar*
+getDfltTpl(void)
+{
+	if(loadModConf != NULL && loadModConf->tplName != NULL)
+		return loadModConf->tplName;
+	else if(pszFileDfltTplName == NULL)
+		return (uchar*)" StdDBFmt";
+	else
+		return pszFileDfltTplName;
+}
+
+
+BEGINinitConfVars		/* (re)set config variables to default values */
+CODESTARTinitConfVars 
+	cs.dbiDrvrDir = NULL;
+	cs.drvrName = NULL;
+	cs.host = NULL;
+	cs.usrName = NULL;	
+	cs.pwd = NULL;
+	cs.dbName = NULL;
+ENDinitConfVars
 
 
 /* config settings */
-static uchar *dbiDrvrDir = NULL;/* global: where do the dbi drivers reside? */
-static uchar *drvrName = NULL;	/* driver to use */
-static uchar *host = NULL;	/* host to connect to */
-static uchar *usrName = NULL;	/* user name for connect */
-static uchar *pwd = NULL;	/* password for connect */
-static uchar *dbName = NULL;	/* database to use */
 #ifdef HAVE_DBI_R
 static dbi_inst dbiInst;
 #endif
@@ -84,6 +165,10 @@ static dbi_inst dbiInst;
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINisCompatibleWithFeature
@@ -115,6 +200,9 @@ CODESTARTfreeInstance
 	free(pData->dbName);
 ENDfreeInstance
 
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 BEGINdbgPrintInstInfo
 CODESTARTdbgPrintInstInfo
@@ -168,9 +256,9 @@ static rsRetVal initConn(instanceData *pData, int bSilent)
 	if(bDbiInitialized == 0) {
 		/* we need to init libdbi first */
 #		ifdef HAVE_DBI_R
-		iDrvrsLoaded = dbi_initialize_r((char*) dbiDrvrDir, &dbiInst);
+		iDrvrsLoaded = dbi_initialize_r((char*) pData->dbiDrvrDir, &dbiInst);
 #		else
-		iDrvrsLoaded = dbi_initialize((char*) dbiDrvrDir);
+		iDrvrsLoaded = dbi_initialize((char*) pData->dbiDrvrDir);
 #		endif
 		if(iDrvrsLoaded == 0) {
 			errmsg.LogError(0, RS_RET_SUSPENDED, "libdbi error: libdbi or libdbi drivers not present on this system - suspending.");
@@ -190,7 +278,7 @@ static rsRetVal initConn(instanceData *pData, int bSilent)
 #	endif
 	if(pData->conn == NULL) {
 		errmsg.LogError(0, RS_RET_SUSPENDED, "can not initialize libdbi connection");
-		iRet = RS_RET_SUSPENDED;
+		ABORT_FINALIZE(RS_RET_SUSPENDED);
 	} else { /* we could get the handle, now on with work... */
 		/* Connect to database */
 		dbi_conn_set_option(pData->conn, "host",     (char*) pData->host);
@@ -201,8 +289,9 @@ static rsRetVal initConn(instanceData *pData, int bSilent)
 		if(dbi_conn_connect(pData->conn) < 0) {
 			reportDBError(pData, bSilent);
 			closeConn(pData); /* ignore any error we may get */
-			iRet = RS_RET_SUSPENDED;
+			ABORT_FINALIZE(RS_RET_SUSPENDED);		
 		}
+		pData->txSupport = dbi_conn_cap_get(pData->conn, "transaction_support");
 	}
 
 finalize_it:
@@ -253,16 +342,180 @@ finalize_it:
 
 BEGINtryResume
 CODESTARTtryResume
-	if(pData->conn == NULL) {
-		iRet = initConn(pData, 1);
+	if(pWrkrData->pData->conn == NULL) {
+		iRet = initConn(pWrkrData->pData, 1);
 	}
 ENDtryResume
 
+/* transaction support 2013-03 */
+BEGINbeginTransaction
+CODESTARTbeginTransaction
+	if(pWrkrData->pData->conn == NULL) {
+		CHKiRet(initConn(pWrkrData->pData, 0));
+	}
+#	if HAVE_DBI_TXSUPP
+	if (pData->txSupport == 1) {
+		if (dbi_conn_transaction_begin(pData->conn) != 0) {	
+			const char *emsg;
+			dbi_conn_error(pData->conn, &emsg);
+			dbgprintf("libdbi server error: begin transaction "
+				  "not successful: %s\n", emsg);
+			closeConn(pData);
+			ABORT_FINALIZE(RS_RET_SUSPENDED);
+		} 
+	}
+#	endif
+finalize_it:
+ENDbeginTransaction
+/* end transaction */
+
 BEGINdoAction
 CODESTARTdoAction
-	dbgprintf("\n");
-	iRet = writeDB(ppString[0], pData);
+	pthread_mutex_lock(&mutDoAct);
+	CHKiRet(writeDB(ppString[0], pWrkrData->pData));
+#	if HAVE_DBI_TXSUPP
+	if (pData->txSupport == 1) {
+		iRet = RS_RET_DEFER_COMMIT;
+	}
+#	endif
+finalize_it:
+	pthread_mutex_unlock(&mutDoAct);
 ENDdoAction
+
+/* transaction support 2013-03 */
+BEGINendTransaction
+CODESTARTendTransaction
+#	if HAVE_DBI_TXSUPP
+	if (dbi_conn_transaction_commit(pData->conn) != 0) {	
+		const char *emsg;
+		dbi_conn_error(pData->conn, &emsg);
+		dbgprintf("libdbi server error: transaction not committed: %s\n",
+			  emsg);
+		closeConn(pData);
+		iRet = RS_RET_SUSPENDED; 
+	} 
+#	endif
+ENDendTransaction
+/* end transaction */
+
+BEGINbeginCnfLoad
+CODESTARTbeginCnfLoad
+	loadModConf = pModConf;
+	pModConf->pConf = pConf;
+	pModConf->tplName = NULL;
+	bLegacyCnfModGlobalsPermitted = 1;
+ENDbeginCnfLoad
+
+BEGINsetModCnf
+	struct cnfparamvals *pvals = NULL;
+	int i;
+CODESTARTsetModCnf
+	pvals = nvlstGetParams(lst, &modpblk, NULL);
+	if(pvals == NULL) {
+		errmsg.LogError(0, RS_RET_MISSING_CNFPARAMS, "omlibdbi: error processing "
+			  	"module config parameters [module(...)]");
+		ABORT_FINALIZE(RS_RET_MISSING_CNFPARAMS);
+	}
+
+	if(Debug) {
+		dbgprintf("module (global) param blk for omlibdbi:\n");
+		cnfparamsPrint(&modpblk, pvals);
+	}
+
+	for(i = 0 ; i < modpblk.nParams ; ++i) {
+		if(!pvals[i].bUsed)
+			continue;
+		if(!strcmp(modpblk.descr[i].name, "template")) {
+			loadModConf->tplName = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+			if(pszFileDfltTplName != NULL) {
+				errmsg.LogError(0, RS_RET_DUP_PARAM, "omlibdbi: warning: default template "
+						"was already set via legacy directive - may lead to inconsistent "
+						"results.");
+			}
+		} else if(!strcmp(modpblk.descr[i].name, "driverdirectory")) {
+			loadModConf->dbiDrvrDir = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else {
+			dbgprintf("omlibdbi: program error, non-handled "
+			  "param '%s' in beginCnfLoad\n", modpblk.descr[i].name);
+		}
+	}
+	bLegacyCnfModGlobalsPermitted = 0;
+finalize_it:
+	if(pvals != NULL)
+		cnfparamvalsDestruct(pvals, &modpblk);
+ENDsetModCnf
+
+BEGINendCnfLoad
+CODESTARTendCnfLoad
+	loadModConf = NULL; /* done loading */
+	/* free legacy config vars */
+	free(pszFileDfltTplName);
+	pszFileDfltTplName = NULL;
+ENDendCnfLoad
+
+BEGINcheckCnf
+CODESTARTcheckCnf
+ENDcheckCnf
+
+BEGINactivateCnf
+CODESTARTactivateCnf
+	runModConf = pModConf;
+ENDactivateCnf
+
+BEGINfreeCnf
+CODESTARTfreeCnf
+	free(pModConf->tplName);
+	free(pModConf->dbiDrvrDir);
+ENDfreeCnf
+
+
+
+
+static inline void
+setInstParamDefaults(instanceData *pData)
+{
+	pData->tplName = NULL;
+}
+
+
+BEGINnewActInst
+	struct cnfparamvals *pvals;
+	uchar *tplToUse;
+	int i;
+CODESTARTnewActInst
+	if((pvals = nvlstGetParams(lst, &actpblk, NULL)) == NULL) {
+		ABORT_FINALIZE(RS_RET_MISSING_CNFPARAMS);
+	}
+
+	CHKiRet(createInstance(&pData));
+	setInstParamDefaults(pData);
+	CODE_STD_STRING_REQUESTnewActInst(1)
+	for(i = 0 ; i < actpblk.nParams ; ++i) {
+		if(!pvals[i].bUsed)
+			continue;
+		if(!strcmp(actpblk.descr[i].name, "server")) {
+			pData->host = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else if(!strcmp(actpblk.descr[i].name, "db")) {
+			pData->dbName = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else if(!strcmp(actpblk.descr[i].name, "uid")) {
+			pData->usrName = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else if(!strcmp(actpblk.descr[i].name, "pwd")) {
+			pData->pwd = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else if(!strcmp(actpblk.descr[i].name, "driver")) {
+			pData->drvrName = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else if(!strcmp(actpblk.descr[i].name, "template")) {
+			pData->tplName = (uchar*)es_str2cstr(pvals[i].val.d.estr, NULL);
+		} else {
+			dbgprintf("omlibdbi: program error, non-handled "
+			  "param '%s'\n", actpblk.descr[i].name);
+		}
+	}
+
+	tplToUse = (pData->tplName == NULL) ? (uchar*)strdup((char*)getDfltTpl()) : pData->tplName;
+	CHKiRet(OMSRsetEntry(*ppOMSR, 0, tplToUse, OMSR_RQD_TPL_OPT_SQL));
+CODE_STD_FINALIZERnewActInst
+	cnfparamvalsDestruct(pvals, &actpblk);
+ENDnewActInst
 
 
 BEGINparseSelectorAct
@@ -276,28 +529,27 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 
 	/* ok, if we reach this point, we have something for us */
 	CHKiRet(createInstance(&pData));
-
 	/* no create the instance based on what we currently have */
-	if(drvrName == NULL) {
+	if(cs.drvrName == NULL) {
 		errmsg.LogError(0, RS_RET_NO_DRIVERNAME, "omlibdbi: no db driver name given - action can not be created");
 		ABORT_FINALIZE(RS_RET_NO_DRIVERNAME);
 	}
 
-	if((pData->drvrName = (uchar*) strdup((char*)drvrName)) == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+	if((pData->drvrName = (uchar*) strdup((char*)cs.drvrName)) == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
 	/* NULL values are supported because drivers have different needs.
 	 * They will err out on connect. -- rgerhards, 2008-02-15
 	 */
-	if(host    != NULL)
-		if((pData->host     = (uchar*) strdup((char*)host))     == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-	if(usrName != NULL)
-		if((pData->usrName  = (uchar*) strdup((char*)usrName))  == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-	if(dbName  != NULL)
-		if((pData->dbName   = (uchar*) strdup((char*)dbName))   == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-	if(pwd     != NULL)
-		if((pData->pwd      = (uchar*) strdup((char*)pwd))       == NULL) ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
-
-	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, OMSR_RQD_TPL_OPT_SQL, (uchar*) " StdDBFmt"));
-
+	if(cs.host != NULL)
+		CHKmalloc(pData->host = (uchar*) strdup((char*)cs.host));
+	if(cs.usrName != NULL)
+		CHKmalloc(pData->usrName = (uchar*) strdup((char*)cs.usrName));
+	if(cs.dbName != NULL)
+		CHKmalloc(pData->dbName = (uchar*) strdup((char*)cs.dbName));
+	if(cs.pwd != NULL)
+		CHKmalloc(pData->pwd = (uchar*) strdup((char*)cs.pwd));
+	if(cs.dbiDrvrDir != NULL)
+		CHKmalloc(loadModConf->dbiDrvrDir = (uchar*) strdup((char*)cs.dbiDrvrDir));
+	CHKiRet(cflineParseTemplateName(&p, *ppOMSR, 0, OMSR_RQD_TPL_OPT_SQL, getDfltTpl()));
 CODE_STD_FINALIZERparseSelectorAct
 ENDparseSelectorAct
 
@@ -318,6 +570,11 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
+CODEqueryEtryPt_STD_CONF2_QUERIES
+CODEqueryEtryPt_STD_CONF2_setModCnf_QUERIES
+CODEqueryEtryPt_STD_CONF2_OMOD_QUERIES
+CODEqueryEtryPt_TXIF_OMOD_QUERIES /* we support the transactional interface! */
 ENDqueryEtryPt
 
 
@@ -326,53 +583,39 @@ ENDqueryEtryPt
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal)
 {
 	DEFiRet;
-
-	if(dbiDrvrDir != NULL) {
-		free(dbiDrvrDir);
-		dbiDrvrDir = NULL;
-	}
-
-	if(drvrName != NULL) {
-		free(drvrName);
-		drvrName = NULL;
-	}
-
-	if(host != NULL) {
-		free(host);
-		host = NULL;
-	}
-
-	if(usrName != NULL) {
-		free(usrName);
-		usrName = NULL;
-	}
-
-	if(pwd != NULL) {
-		free(pwd);
-		pwd = NULL;
-	}
-
-	if(dbName != NULL) {
-		free(dbName);
-		dbName = NULL;
-	}
-
+	free(cs.dbiDrvrDir);
+	cs.dbiDrvrDir = NULL;
+	free(cs.drvrName);
+	cs.drvrName = NULL;
+	free(cs.host);
+	cs.host = NULL;
+	free(cs.usrName);
+	cs.usrName = NULL;
+	free(cs.pwd);
+	cs.pwd = NULL;
+	free(cs.dbName);
+	cs.dbName = NULL;
 	RETiRet;
 }
 
 
 BEGINmodInit()
 CODESTARTmodInit
+INITLegCnfVars
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
+#	ifndef HAVE_DBI_TXSUPP
+	DBGPRINTF("omlibdbi: no transaction support in libdbi\n");
+#	warning libdbi too old - transactions are not enabled (use 0.9 or later)
+#	endif
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbidriverdirectory", 0, eCmdHdlrGetWord, NULL, &dbiDrvrDir, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbidriver", 0, eCmdHdlrGetWord, NULL, &drvrName, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbihost", 0, eCmdHdlrGetWord, NULL, &host, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbiusername", 0, eCmdHdlrGetWord, NULL, &usrName, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbipassword", 0, eCmdHdlrGetWord, NULL, &pwd, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"actionlibdbidbname", 0, eCmdHdlrGetWord, NULL, &dbName, STD_LOADABLE_MODULE_ID));
-	CHKiRet(omsdRegCFSLineHdlr(	(uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
+	CHKiRet(regCfSysLineHdlr2((uchar *)"actionlibdbidriverdirectory", 0, eCmdHdlrGetWord, NULL, &cs.dbiDrvrDir, STD_LOADABLE_MODULE_ID, &bLegacyCnfModGlobalsPermitted));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionlibdbidriver", 0, eCmdHdlrGetWord, NULL, &cs.drvrName, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionlibdbihost", 0, eCmdHdlrGetWord, NULL, &cs.host, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionlibdbiusername", 0, eCmdHdlrGetWord, NULL, &cs.usrName, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionlibdbipassword", 0, eCmdHdlrGetWord, NULL, &cs.pwd, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"actionlibdbidbname", 0, eCmdHdlrGetWord, NULL, &cs.dbName, STD_LOADABLE_MODULE_ID));
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"resetconfigvariables", 1, eCmdHdlrCustomHandler, resetConfigVariables, NULL, STD_LOADABLE_MODULE_ID));
 	DBGPRINTF("omlibdbi compiled with version %s loaded, libdbi version %s\n", VERSION, dbi_version());
 ENDmodInit
 

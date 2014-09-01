@@ -6,7 +6,7 @@
  *
  * File begun on 2007-10-18 by sur5r (converted from ommysql.c)
  *
- * Copyright 2007, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2007, 2013 Rainer Gerhards and Adiscon GmbH.
  *
  * The following link my be useful for the not-so-postgres literate
  * when setting up a test environment (on Fedora):
@@ -50,6 +50,7 @@
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("ompgsql")
 
 /* internal structures
  */
@@ -65,12 +66,31 @@ typedef struct _instanceData {
 	ConnStatusType	eLastPgSQLStatus; 	/* last status from postgres */
 } instanceData;
 
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
+
+typedef struct configSettings_s {
+	EMPTY_STRUCT
+} configSettings_t;
+static configSettings_t __attribute__((unused)) cs;
+
+static pthread_mutex_t mutDoAct = PTHREAD_MUTEX_INITIALIZER;
+
+BEGINinitConfVars		/* (re)set config variables to default values */
+CODESTARTinitConfVars 
+ENDinitConfVars
+
 
 static rsRetVal writePgSQL(uchar *psz, instanceData *pData);
 
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 
 BEGINisCompatibleWithFeature
@@ -98,6 +118,9 @@ CODESTARTfreeInstance
 	closePgSQL(pData);
 ENDfreeInstance
 
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 BEGINdbgPrintInstInfo
 CODESTARTdbgPrintInstInfo
@@ -234,8 +257,8 @@ finalize_it:
 
 BEGINtryResume
 CODESTARTtryResume
-	if(pData->f_hpgsql == NULL) {
-		iRet = initPgSQL(pData, 1);
+	if(pWrkrData->pData->f_hpgsql == NULL) {
+		iRet = initPgSQL(pWrkrData->pData, 1);
 		if(iRet == RS_RET_OK) {
 			/* the code above seems not to actually connect to the database. As such, we do a
 			 * dummy statement (a pointless select...) to verify the connection and return
@@ -243,7 +266,7 @@ CODESTARTtryResume
 			 * PostgreSQL expert, so any patch that does the desired result in a more
 			 * intelligent way is highly welcome. -- rgerhards, 2009-12-16
 			 */
-			iRet = writePgSQL((uchar*)"select 'a' as a", pData);
+			iRet = writePgSQL((uchar*)"select 'a' as a", pWrkrData->pData);
 		}
 
 	}
@@ -252,24 +275,28 @@ ENDtryResume
 
 BEGINbeginTransaction
 CODESTARTbeginTransaction
-dbgprintf("ompgsql: beginTransaction\n");
-	iRet = writePgSQL((uchar*) "begin", pData); /* TODO: make user-configurable */
+	dbgprintf("ompgsql: beginTransaction\n");
+	if(pWrkrData->pData->f_hpgsql == NULL)
+	       initPgSQL(pWrkrData->pData, 0);
+	iRet = writePgSQL((uchar*) "begin", pWrkrData->pData); /* TODO: make user-configurable */
 ENDbeginTransaction
 
 
 BEGINdoAction
 CODESTARTdoAction
+	pthread_mutex_lock(&mutDoAct);
 	dbgprintf("\n");
-	CHKiRet(writePgSQL(ppString[0], pData));
+	CHKiRet(writePgSQL(ppString[0], pWrkrData->pData));
 	if(bCoreSupportsBatching)
 		iRet = RS_RET_DEFER_COMMIT;
 finalize_it:
+	pthread_mutex_unlock(&mutDoAct);
 ENDdoAction
 
 
 BEGINendTransaction
 CODESTARTendTransaction
-	iRet = writePgSQL((uchar*) "commit;", pData); /* TODO: make user-configurable */
+	iRet = writePgSQL((uchar*) "commit;", pWrkrData->pData); /* TODO: make user-configurable */
 dbgprintf("ompgsql: endTransaction\n");
 ENDendTransaction
 
@@ -336,8 +363,6 @@ CODE_STD_STRING_REQUESTparseSelectorAct(1)
 	if (iPgSQLPropErr) { 
 		errmsg.LogError(0, RS_RET_INVALID_PARAMS, "Trouble with PgSQL connection properties. -PgSQL logging disabled");
 		ABORT_FINALIZE(RS_RET_INVALID_PARAMS);
-	} else {
-		CHKiRet(initPgSQL(pData, 0));
 	}
 
 CODE_STD_FINALIZERparseSelectorAct
@@ -351,16 +376,23 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
 CODEqueryEtryPt_TXIF_OMOD_QUERIES /* we support the transactional interface! */
 ENDqueryEtryPt
 
 
 BEGINmodInit()
 CODESTARTmodInit
+INITLegCnfVars
 	*ipIFVersProvided = CURR_MOD_IF_VERSION; /* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
 	CHKiRet(objUse(errmsg, CORE_COMPONENT));
 	INITChkCoreFeature(bCoreSupportsBatching, CORE_FEATURE_BATCHING);
+
+#	warning: transaction support missing for v8
+	bCoreSupportsBatching= 0;
+	DBGPRINTF("ompgsql: transactions are not yet supported on v8\n");
+
 	DBGPRINTF("ompgsql: module compiled with rsyslog version %s.\n", VERSION);
 	DBGPRINTF("ompgsql: %susing transactional output interface.\n", bCoreSupportsBatching ? "" : "not ");
 ENDmodInit

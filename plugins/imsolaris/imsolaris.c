@@ -86,6 +86,7 @@
 
 MODULE_TYPE_INPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("imsolaris")
 
 /* defines */
 #define PATH_LOG	"/dev/log"
@@ -99,6 +100,10 @@ DEFobjCurrIf(prop)
 
 
 /* config settings */
+struct modConfData_s {
+	EMPTY_STRUCT;
+};
+
 static prop_t *pInputName = NULL;	/* our inputName currently is always "imuxsock", and this will hold it */
 static char *LogName = NULL;	/* the log socket name TODO: make configurable! */
 
@@ -247,12 +252,12 @@ getMsgs(thrdInfo_t *pThrd, int timeout)
 		CHKmalloc(pRcv = (uchar*) malloc(sizeof(uchar) * (iMaxLine + 1)));
 	}
 
-	 while(pThrd->bShallStop != TRUE) {
+	 while(pThrd->bShallStop != RSTRUE) {
 		DBGPRINTF("imsolaris: waiting for next message (timeout %d)...\n", timeout);
 		if(timeout == 0) {
 			nfds = poll(&sun_Pfd, 1, timeout); /* wait without timeout */
 
-			if(pThrd->bShallStop == TRUE) {
+			if(pThrd->bShallStop == RSTRUE) {
 				break;
 			}
 
@@ -300,6 +305,31 @@ finalize_it:
 
 	RETiRet;
 }
+
+
+BEGINbeginCnfLoad
+CODESTARTbeginCnfLoad
+ENDbeginCnfLoad
+
+
+BEGINendCnfLoad
+CODESTARTendCnfLoad
+ENDendCnfLoad
+
+
+BEGINcheckCnf
+CODESTARTcheckCnf
+ENDcheckCnf
+
+
+BEGINactivateCnf
+CODESTARTactivateCnf
+ENDactivateCnf
+
+
+BEGINfreeCnf
+CODESTARTfreeCnf
+ENDfreeCnf
 
 
 /* This function is called to gather input. */

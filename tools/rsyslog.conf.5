@@ -17,7 +17,7 @@
 .\" along with this program; if not, write to the Free Software
 .\" Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111, USA.
 .\"
-.TH RSYSLOG.CONF 5 "11 July 2008" "Version 3.18.0" "Linux System Administration"
+.TH RSYSLOG.CONF 5 "22 October 2012" "Version 7.2.0" "Linux System Administration"
 .SH NAME
 rsyslog.conf \- rsyslogd(8) configuration file
 .SH DESCRIPTION
@@ -218,7 +218,7 @@ beginning with a slash ('/').
 
 .B Example:
 .RS
-*.*     /var/log/traditionalfile.log;RSYSLOG_TraditionalFormat      # log to a file in the traditional format
+*.*     /var/log/traditionalfile.log;RSYSLOG_TraditionalFileFormat      # log to a file in the traditional format
 .RE
 
 Note: if you would like to use high-precision timestamps in your log files,
@@ -335,13 +335,6 @@ Rsyslog offers three different types "filter conditions":
    * expression-based filters
 .RE
 
-.SS Blocks
-Rsyslogd supports BSD-style blocks inside rsyslog.conf. Each block of lines is separated from 
-the previous block by a program or hostname specification. A block will only log messages 
-corresponding to the most recent program and hostname specifications given. Thus, a block which 
-selects "ppp" as the program, directly followed by a block that selects messages from the 
-hostname "dialhost", then the second block will only log messages from the ppp program on dialhost.
-
 .SS Selectors
 .B Selectors are the traditional way of filtering syslog messages. 
 They have been kept in rsyslog with their original syntax, because it is well-known, highly 
@@ -422,7 +415,7 @@ To escape:
 .sp 0
    \\ = \\\\ --> '\\' is used to escape (as in C)
 .sp 0
-$template TraditionalFormat,"%timegenerated% %HOSTNAME% %syslogtag%%msg%\n"
+$template TraditionalFormat,"%timegenerated% %HOSTNAME% %syslogtag%%msg%\\n"
 
 Properties can be accessed by the property replacer (see there for details).
 
@@ -494,7 +487,7 @@ A template that resembles traditional syslogd file output:
 .RS
 $template TraditionalFormat,"%timegenerated% %HOSTNAME%
 .sp 0
-%syslogtag%%msg:::drop-last-lf%\n"
+%syslogtag%%msg:::drop-last-lf%\\n"
 .RE
 
 A template that tells you a little more about the message:
@@ -502,7 +495,7 @@ A template that tells you a little more about the message:
 .RS
 $template precise,"%syslogpriority%,%syslogfacility%,%timegenerated%,%HOSTNAME%,
 .sp 0
-%syslogtag%,%msg%\n"
+%syslogtag%,%msg%\\n"
 .RE
 
 A template for RFC 3164 format:
@@ -514,7 +507,7 @@ $template RFC3164fmt,"<%PRI%>%TIMESTAMP% %HOSTNAME% %syslogtag%%msg%"
 A template for the format traditionally used for user messages:
 .sp
 .RS
-$template usermsg," XXXX%syslogtag%%msg%\n\r"
+$template usermsg," XXXX%syslogtag%%msg%\\n\\r"
 .RE
 
 And a template with the traditional wall-message format:

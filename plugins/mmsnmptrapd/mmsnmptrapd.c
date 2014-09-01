@@ -49,6 +49,7 @@
 
 MODULE_TYPE_OUTPUT
 MODULE_TYPE_NOKEEP
+MODULE_CNFNAME("mmsnmptrapd")
 
 static rsRetVal resetConfigVariables(uchar __attribute__((unused)) *pp, void __attribute__((unused)) *pVal);
 
@@ -67,20 +68,20 @@ struct severMap_s {
 
 typedef struct _instanceData {
 	uchar *pszTagName;
-	uchar *pszTagID;	/* chaced: name plus trailing shlash (for compares) */
-	int lenTagID;		/* cached length of tag ID, for performance reasons */
+	uchar *pszTagID;	/* cached: name plus trailing shlash (for compares) */
+	int lenTagID;		/* cached: length of tag ID, for performance reasons */
 	struct severMap_s *severMap;
 } instanceData;
+
+typedef struct wrkrInstanceData {
+	instanceData *pData;
+} wrkrInstanceData_t;
 
 typedef struct configSettings_s {
 	uchar *pszTagName;	/**< name of tag start value that indicates snmptrapd initiated message */
 	uchar *pszSeverityMapping; /**< severitystring to numerical code mapping for snmptrapd string */
 } configSettings_t;
-configSettings_t cs;
-
-//TODO: enable for v6
-#if 0
-SCOPING_SUPPORT; /* must be set AFTER configSettings_t is defined */
+static configSettings_t cs;
 
 BEGINinitConfVars		/* (re)set config variables to default values */
 CODESTARTinitConfVars 
@@ -88,13 +89,16 @@ CODESTARTinitConfVars
 	cs.pszSeverityMapping = NULL;
 	resetConfigVariables(NULL, NULL);
 ENDinitConfVars
-#endif
 
 
 BEGINcreateInstance
 CODESTARTcreateInstance
 ENDcreateInstance
 
+
+BEGINcreateWrkrInstance
+CODESTARTcreateWrkrInstance
+ENDcreateWrkrInstance
 
 BEGINisCompatibleWithFeature
 CODESTARTisCompatibleWithFeature
@@ -113,6 +117,10 @@ CODESTARTfreeInstance
 	free(pData->pszTagName);
 	free(pData->pszTagID);
 ENDfreeInstance
+
+BEGINfreeWrkrInstance
+CODESTARTfreeWrkrInstance
+ENDfreeWrkrInstance
 
 
 BEGINdbgPrintInstInfo
@@ -194,7 +202,6 @@ getTagComponent(uchar *tag, uchar *dst, int *lenDst)
 		++i;
 	}
 	dst[i] = '\0';
-dbgprintf("XXXX: getTagComponent dst on output: '%s', len %d\n", dst, i);
 	*lenDst = i;
 done:
 	return i;
@@ -229,9 +236,10 @@ BEGINdoAction
 	uchar *pszTag;
 	uchar pszSever[512];
 	uchar pszHost[512];
+	instanceData *pData;
 CODESTARTdoAction
+	pData = pWrkrData->pData;
 	pMsg = (msg_t*) ppString[0];
-	dbgprintf("XXXX: mmsnmptrapd called with pMsg %p\n", pMsg);
 	getTAG(pMsg, &pszTag, &lenTAG);
 	if(strncmp((char*)pszTag, (char*)pData->pszTagID, pData->lenTagID)) {
 		DBGPRINTF("tag '%s' not matching, mmsnmptrapd ignoring this message\n",
@@ -240,18 +248,16 @@ CODESTARTdoAction
 	}
 
 	lenSever = sizeof(pszSever);
-dbgprintf("XXXX: pszTag: '%s', lenID %d\n", pszTag, pData->lenTagID);
 	getTagComponent(pszTag+pData->lenTagID-1, pszSever, &lenSever);
 	lenHost = sizeof(pszHost);
 	getTagComponent(pszTag+pData->lenTagID+lenSever, pszHost, &lenHost);
-	dbgprintf("XXXX: mmsnmptrapd sever '%s'(%d), host '%s'(%d)\n", pszSever, lenSever, pszHost,lenHost);
+	DBGPRINTF("mmsnmptrapd: sever '%s'(%d), host '%s'(%d)\n", pszSever, lenSever, pszHost,lenHost);
 
 	if(pszHost[lenHost-1] == ':') {
 		pszHost[lenHost-1] = '\0';
 		--lenHost;
 	}
 	sevCode = lookupSeverityCode(pData, pszSever);
-dbgprintf("XXXX: severity for message is %d\n", sevCode);
 	/* now apply new settings */
 	MsgSetTAG(pMsg, pData->pszTagName, pData->lenTagID);
 	MsgSetHOSTNAME(pMsg, pszHost, lenHost);
@@ -271,7 +277,7 @@ buildSeverityMapping(instanceData *pData)
 	uchar pszSevCode[512];
 	int sevCode;
 	uchar *mapping;
-	struct severMap_s *node;
+	struct severMap_s *node = NULL;
 	DEFiRet;
 
 	mapping = cs.pszSeverityMapping;
@@ -304,6 +310,10 @@ buildSeverityMapping(instanceData *pData)
 	}
 
 finalize_it:
+	if(iRet != RS_RET_OK) {
+		if(node != NULL)
+			free(node);
+	}
 	RETiRet;
 }
 
@@ -366,6 +376,8 @@ ENDmodExit
 BEGINqueryEtryPt
 CODESTARTqueryEtryPt
 CODEqueryEtryPt_STD_OMOD_QUERIES
+CODEqueryEtryPt_STD_OMOD8_QUERIES
+CODEqueryEtryPt_STD_CONF2_CNFNAME_QUERIES 
 ENDqueryEtryPt
 
 
@@ -389,7 +401,7 @@ BEGINmodInit()
 	unsigned long opts;
 	int bMsgPassingSupported;
 CODESTARTmodInit
-//TODO v6: add SCOPINGmodInit
+INITLegCnfVars
 	*ipIFVersProvided = CURR_MOD_IF_VERSION;
 		/* we only support the current interface specification */
 CODEmodInit_QueryRegCFSLineHdlr
@@ -418,7 +430,7 @@ CODEmodInit_QueryRegCFSLineHdlr
 	cs.pszTagName = NULL;
 	cs.pszSeverityMapping = NULL;
 	
-	CHKiRet(omsdRegCFSLineHdlr((uchar *)"mmsnmptrapdtag", 0, eCmdHdlrInt,
+	CHKiRet(omsdRegCFSLineHdlr((uchar *)"mmsnmptrapdtag", 0, eCmdHdlrGetWord,
 				    NULL, &cs.pszTagName, STD_LOADABLE_MODULE_ID));
 	CHKiRet(omsdRegCFSLineHdlr((uchar *)"mmsnmptrapdseveritymapping", 0, eCmdHdlrGetWord,
 				    NULL, &cs.pszSeverityMapping, STD_LOADABLE_MODULE_ID));

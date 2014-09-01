@@ -3,16 +3,27 @@
 DPKG_EXPORT_BUILDFLAGS = 1
 include /usr/share/dpkg/buildflags.mk
 
+DEB_HOST_ARCH_OS ?= $(shell dpkg-architecture -qDEB_HOST_ARCH_OS)
+
 %:
-	dh $@ --with autotools_dev
+	dh $@ --with autoreconf,systemd
+
+ifeq ($(DEB_HOST_ARCH_OS), linux)
+confflags += 	--enable-imptcp \
+		--enable-kmsg
+endif
 
 override_dh_auto_configure:
 	dh_auto_configure -- \
+		$(confflags) \
 		--enable-mysql \
 		--enable-pgsql \
+		--enable-ommongodb \
+		--enable-elasticsearch \
 		--enable-mail \
 		--enable-imfile \
 		--enable-impstats \
+		--enable-klog \
 		--enable-gssapi-krb5 \
 		--enable-gnutls \
 		--enable-relp \
@@ -23,16 +34,32 @@ override_dh_auto_configure:
 		--enable-pmsnare \
 		--enable-omprog \
 		--enable-omuxsock \
+		--enable-mmanon \
+		--enable-mmnormalize \
+		--enable-mmjsonparse \
+		--enable-mmutf8fix \
+		--enable-mmpstrucdata \
+		--enable-mmsequence \
+		--disable-libgcrypt \
 		--disable-testbench \
+		--disable-generate-man-pages \
 		--with-systemdsystemunitdir=/lib/systemd/system
 
 override_dh_auto_install:
 	dh_auto_install
-	install --mode=644 -D plugins/ommysql/createDB.sql debian/rsyslog-mysql/usr/share/dbconfig-common/data/rsyslog-mysql/install/mysql
-	install --mode=644 -D plugins/ompgsql/createDB.sql debian/rsyslog-pgsql/usr/share/dbconfig-common/data/rsyslog-pgsql/install/pgsql
+	install --mode=644 -D plugins/ommysql/createDB.sql \
+		debian/rsyslog-mysql/usr/share/dbconfig-common/data/rsyslog-mysql/install/mysql
+	install --mode=644 -D plugins/ompgsql/createDB.sql \
+		debian/rsyslog-pgsql/usr/share/dbconfig-common/data/rsyslog-pgsql/install/pgsql
 
-override_dh_compress:
-	dh_compress -X rsyslog-example.conf
+override_dh_install:
+	dh_install -X .la --list-missing
+ifeq ($(DEB_HOST_ARCH_OS), linux)
+	install --mode=644 debian/tmp/usr/lib/rsyslog/imkmsg.so \
+		debian/rsyslog/usr/lib/rsyslog/
+	install --mode=644 debian/tmp/usr/lib/rsyslog/imptcp.so \
+		debian/rsyslog/usr/lib/rsyslog/
+endif
 
 override_dh_installinit:
-	dh_installinit -R -- start 10 2 3 4 5 . start 30 0 6 . stop 90 1 .
+	dh_installinit -R

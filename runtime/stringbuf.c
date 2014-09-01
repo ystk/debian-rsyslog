@@ -32,7 +32,9 @@
 #include <assert.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <sys/types.h>
+#include <libestr.h>
 #include "rsyslog.h"
 #include "stringbuf.h"
 #include "srUtils.h"
@@ -95,6 +97,84 @@ rsRetVal rsCStrConstructFromszStr(cstr_t **ppThis, uchar *sz)
 
 	/* we do NOT need to copy the \0! */
 	memcpy(pThis->pBuf, sz, pThis->iStrLen);
+
+	*ppThis = pThis;
+
+finalize_it:
+	RETiRet;
+}
+
+
+/* a helper function for rsCStr*Strf()
+ */
+static rsRetVal rsCStrConstructFromszStrv(cstr_t **ppThis, char *fmt, va_list ap) __attribute__((format(gnu_printf,2, 0)));
+static rsRetVal rsCStrConstructFromszStrv(cstr_t **ppThis, char *fmt, va_list ap)
+{
+	DEFiRet;
+	cstr_t *pThis;
+	va_list ap2;
+	int len;
+
+	assert(ppThis != NULL);
+
+	va_copy(ap2, ap);
+	len = vsnprintf(NULL, 0, (char*)fmt, ap2);
+	va_end(ap2);
+
+	if(len < 0)
+		ABORT_FINALIZE(RS_RET_ERR);
+
+	CHKiRet(rsCStrConstruct(&pThis));
+
+	pThis->iBufSize = pThis->iStrLen = len;
+	len++; /* account for the \0 written by vsnprintf */
+	if((pThis->pBuf = (uchar*) MALLOC(sizeof(uchar) * len)) == NULL) {
+		RSFREEOBJ(pThis);
+		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+	}
+
+	vsnprintf((char*)pThis->pBuf, len, (char*)fmt, ap);
+	*ppThis = pThis;
+finalize_it:
+	RETiRet;
+}
+
+
+/* construct from a printf-style formated string
+ */
+rsRetVal rsCStrConstructFromszStrf(cstr_t **ppThis, char *fmt, ...)
+{
+	DEFiRet;
+	va_list ap;
+
+	va_start(ap, fmt);
+	iRet = rsCStrConstructFromszStrv(ppThis, fmt, ap);
+	va_end(ap);
+
+	RETiRet;
+}
+
+
+/* construct from es_str_t string
+ * rgerhards 2010-12-03
+ */
+rsRetVal cstrConstructFromESStr(cstr_t **ppThis, es_str_t *str)
+{
+	DEFiRet;
+	cstr_t *pThis;
+
+	assert(ppThis != NULL);
+
+	CHKiRet(rsCStrConstruct(&pThis));
+
+	pThis->iBufSize = pThis->iStrLen = es_strlen(str);
+	if((pThis->pBuf = (uchar*) MALLOC(sizeof(uchar) * pThis->iStrLen)) == NULL) {
+		RSFREEOBJ(pThis);
+		ABORT_FINALIZE(RS_RET_OUT_OF_MEMORY);
+	}
+
+	/* we do NOT need to copy the \0! */
+	memcpy(pThis->pBuf, es_getBufAddr(str), pThis->iStrLen);
 
 	*ppThis = pThis;
 
@@ -227,6 +307,27 @@ rsRetVal cstrAppendCStr(cstr_t *pThis, cstr_t *pstrAppend)
 }
 
 
+/* append a printf-style formated string
+ */
+rsRetVal rsCStrAppendStrf(cstr_t *pThis, char *fmt, ...)
+{
+	DEFiRet;
+	va_list ap;
+	cstr_t *pStr = NULL;
+
+	va_start(ap, fmt);
+	iRet = rsCStrConstructFromszStrv(&pStr, (char*)fmt, ap);
+	va_end(ap);
+
+	CHKiRet(iRet);
+
+	iRet = cstrAppendCStr(pThis, pStr);
+	rsCStrDestruct(&pStr);
+finalize_it:
+	RETiRet;
+}
+
+
 rsRetVal rsCStrAppendInt(cstr_t *pThis, long i)
 {
 	DEFiRet;
@@ -356,11 +457,14 @@ uchar*  rsCStrGetSzStr(cstr_t *pThis)
  * PLEASE NOTE: the caller must free the memory returned in ppSz in any case
  * (except, of course, if it is NULL).
  */
-rsRetVal cstrConvSzStrAndDestruct(cstr_t *pThis, uchar **ppSz, int bRetNULL)
+rsRetVal cstrConvSzStrAndDestruct(cstr_t **ppThis, uchar **ppSz, int bRetNULL)
 {
 	DEFiRet;
 	uchar* pRetBuf;
+	cstr_t *pThis;
 
+	assert(ppThis != NULL);
+	pThis = *ppThis;
 	rsCHECKVALIDOBJECT(pThis, OIDrsCStr);
 	assert(ppSz != NULL);
 	assert(bRetNULL == 0 || bRetNULL == 1);
@@ -374,7 +478,7 @@ rsRetVal cstrConvSzStrAndDestruct(cstr_t *pThis, uchar **ppSz, int bRetNULL)
 		}
 	} else
 		pRetBuf = pThis->pBuf;
-	
+
 	*ppSz = pRetBuf;
 
 finalize_it:
@@ -383,6 +487,8 @@ finalize_it:
 	 * also free the sz String buffer, which we pass on to the user.
 	 */
 	RSFREEOBJ(pThis);
+	*ppThis = NULL;
+
 	RETiRet;
 }
 
@@ -427,32 +533,14 @@ rsRetVal rsCStrTruncate(cstr_t *pThis, size_t nTrunc)
 
 /* Trim trailing whitespace from a given string
  */
-rsRetVal rsCStrTrimTrailingWhiteSpace(cstr_t *pThis)
-{
-	register int i;
-	register uchar *pC;
-	rsCHECKVALIDOBJECT(pThis, OIDrsCStr);
-
-	i = pThis->iStrLen;
-	pC = pThis->pBuf + i - 1;
-	while(i > 0 && isspace((int)*pC)) {
-		--pC;
-		--i;
-	}
-	/* i now is the new string length! */
-	pThis->iStrLen = i;
-
-	return RS_RET_OK;
-}
-
-/* Trim trailing whitespace from a given string
- */
 rsRetVal cstrTrimTrailingWhiteSpace(cstr_t *pThis)
 {
 	register int i;
 	register uchar *pC;
 	rsCHECKVALIDOBJECT(pThis, OIDrsCStr);
 
+	if(pThis->iStrLen == 0)
+		goto done; /* empty string -> nothing to trim ;) */
 	i = pThis->iStrLen;
 	pC = pThis->pBuf + i - 1;
 	while(i > 0 && isspace((int)*pC)) {
@@ -460,10 +548,12 @@ rsRetVal cstrTrimTrailingWhiteSpace(cstr_t *pThis)
 		--i;
 	}
 	/* i now is the new string length! */
-	pThis->iStrLen = i;
-	pThis->pBuf[pThis->iStrLen] = '0'; /* we always have this space */
+	if(i != (int) pThis->iStrLen) {
+		pThis->iStrLen = i;
+		pThis->pBuf[pThis->iStrLen] = '\0'; /* we always have this space */
+	}
 
-	return RS_RET_OK;
+done:	return RS_RET_OK;
 }
 
 /* compare two string objects - works like strcmp(), but operates
@@ -839,13 +929,7 @@ int rsCStrSzStrCmp(cstr_t *pCS1, uchar *psz, size_t iLenSz)
 			 * length, so we need to actually check if they
 			 * are equal.
 			 */
-			register size_t i;
-			for(i = 0 ; i < iLenSz ; ++i) {
-				if(pCS1->pBuf[i] != psz[i])
-					return pCS1->pBuf[i] - psz[i];
-			}
-			/* if we arrive here, the strings are equal */
-			return 0;
+			return strncmp((char*)pCS1->pBuf, (char*)psz, iLenSz);
 		}
 	else
 		return pCS1->iStrLen - iLenSz;

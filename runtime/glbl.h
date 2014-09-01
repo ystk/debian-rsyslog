@@ -8,33 +8,38 @@
  * Please note that there currently is no glbl.c file as we do not yet
  * have any implementations.
  *
- * Copyright 2008, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2014 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
- * The rsyslog runtime library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The rsyslog runtime library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the rsyslog runtime library.  If not, see <http://www.gnu.org/licenses/>.
- *
- * A copy of the GPL can be found in the file "COPYING" in this distribution.
- * A copy of the LGPL can be found in the file "COPYING.LESSER" in this distribution.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *       http://www.apache.org/licenses/LICENSE-2.0
+ *       -or-
+ *       see COPYING.ASL20 in the source distribution
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 #ifndef GLBL_H_INCLUDED
 #define GLBL_H_INCLUDED
 
+#include <sys/types.h>
+#include <liblogging/stdlog.h>
+#include "rainerscript.h"
 #include "prop.h"
 
 #define glblGetIOBufSize() 4096 /* size of the IO buffer, e.g. for strm class */
+
+extern pid_t glbl_ourpid;
+extern int bProcessInternalMessages;
+extern stdlog_channel_t stdlog_hdl;
 
 /* interfaces */
 BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
@@ -50,6 +55,7 @@ BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
 	SIMP_PROP(Option_DisallowWarning, int)
 	SIMP_PROP(DisableDNS, int)
 	SIMP_PROP(LocalFQDNName, uchar*)
+	SIMP_PROP(mainqCnfObj, struct cnfobj*)
 	SIMP_PROP(LocalHostName, uchar*)
 	SIMP_PROP(LocalDomain, uchar*)
 	SIMP_PROP(StripDomains, char**)
@@ -58,6 +64,14 @@ BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
 	SIMP_PROP(DfltNetstrmDrvrCAF, uchar*)
 	SIMP_PROP(DfltNetstrmDrvrKeyFile, uchar*)
 	SIMP_PROP(DfltNetstrmDrvrCertFile, uchar*)
+	SIMP_PROP(ParserControlCharacterEscapePrefix, uchar)
+	SIMP_PROP(ParserDropTrailingLFOnReception, int)
+	SIMP_PROP(ParserEscapeControlCharactersOnReceive, int)
+	SIMP_PROP(ParserSpaceLFOnReceive, int)
+	SIMP_PROP(ParserEscape8BitCharactersOnReceive, int)
+	SIMP_PROP(ParserEscapeControlCharacterTab, int)
+	SIMP_PROP(ParserEscapeControlCharactersCStyle, int)
+
 	/* added v3, 2009-06-30 */
 	rsRetVal (*GenerateLocalHostNameProperty)(void);
 	prop_t* (*GetLocalHostNameProp)(void);
@@ -76,7 +90,11 @@ BEGINinterface(glbl) /* name must also be changed in ENDinterface macro! */
 	 */
 	SIMP_PROP(FdSetSize, int)
 	/* v7: was neeeded to mean v5+v6 - do NOT add anything else for that version! */
-	/* next change is v8! */
+	/* next change is v9! */
+	/* v8 - 2012-03-21 */
+	prop_t* (*GetLocalHostIP)(void);
+	uchar* (*GetSourceIPofLocalClient)(void);		/* [ar] */
+	rsRetVal (*SetSourceIPofLocalClient)(uchar*);		/* [ar] */
 #undef	SIMP_PROP
 ENDinterface(glbl)
 #define glblCURR_IF_VERSION 7 /* increment whenever you change the interface structure! */
@@ -84,5 +102,20 @@ ENDinterface(glbl)
 
 /* the remaining prototypes */
 PROTOTYPEObj(glbl);
+
+extern int glblDebugOnShutdown;	/* start debug log when we are shut down */
+extern short janitorInterval;
+
+static inline pid_t glblGetOurPid(void) { return glbl_ourpid; }
+static inline void glblSetOurPid(pid_t pid) { glbl_ourpid = pid; }
+
+void glblPrepCnf(void);
+void glblProcessCnf(struct cnfobj *o);
+void glblProcessTimezone(struct cnfobj *o);
+void glblProcessMainQCnf(struct cnfobj *o);
+void glblDestructMainqCnfObj();
+void glblDoneLoadCnf(void);
+const uchar * glblGetWorkDirRaw(void);
+tzinfo_t* glblFindTimezoneInfo(char *id);
 
 #endif /* #ifndef GLBL_H_INCLUDED */

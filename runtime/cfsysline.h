@@ -24,31 +24,16 @@
 
 #include "linkedlist.h"
 
-/* types of configuration handlers
- */
-typedef enum cslCmdHdlrType {
-	eCmdHdlrInvalid = 0,		/* invalid handler type - indicates a coding error */
-	eCmdHdlrCustomHandler,		/* custom handler, just call handler function */
-	eCmdHdlrUID,
-	eCmdHdlrGID,
-	eCmdHdlrBinary,
-	eCmdHdlrFileCreateMode,
-	eCmdHdlrInt,
-	eCmdHdlrSize,
-	eCmdHdlrGetChar,
-	eCmdHdlrFacility,
-	eCmdHdlrSeverity,
-	eCmdHdlrGetWord
-} ecslCmdHdrlType;
-
 /* this is a single entry for a parse routine. It describes exactly
  * one entry point/handler.
  * The short name is cslch (Configfile SysLine CommandHandler)
  */
 struct cslCmdHdlr_s { /* config file sysline parse entry */
+	ecslConfObjType __attribute__((deprecated)) eConfObjType;		/* which config object is this for? */
 	ecslCmdHdrlType eType;			/* which type of handler is this? */
 	rsRetVal (*cslCmdHdlr)();		/* function pointer to use with handler (params depending on eType) */
 	void *pData;				/* user-supplied data pointer */
+	int *permitted;				/* is this parameter currently permitted? (NULL=don't check) */
 };
 typedef struct cslCmdHdlr_s cslCmdHdlr_t;
 
@@ -65,6 +50,7 @@ typedef struct cslCmd_s cslCmd_t;
 
 /* prototypes */
 rsRetVal regCfSysLineHdlr(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie);
+rsRetVal regCfSysLineHdlr2(uchar *pCmdName, int bChainingPermitted, ecslCmdHdrlType eType, rsRetVal (*pHdlr)(), void *pData, void *pOwnerCookie, int *permitted);
 rsRetVal unregCfSysLineHdlrs(void);
 rsRetVal unregCfSysLineHdlrs4Owner(void *pOwnerCookie);
 rsRetVal processCfSysLineCommand(uchar *pCmd, uchar **p);

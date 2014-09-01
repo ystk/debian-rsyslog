@@ -41,8 +41,6 @@
 #include <assert.h>
 #include <sys/wait.h>
 #include <ctype.h>
-#define TRUE 1
-#define FALSE 0
 #include "srUtils.h"
 #include "obj.h"
 
@@ -88,12 +86,17 @@ syslogName_t	syslogFacNames[] = {
 	{"mark",         LOG_MARK},		/* INTERNAL */
 	{"news",         LOG_NEWS},
 	{"security",     LOG_AUTH},		/* DEPRECATED */
+	{"bsd_security", (13<<3) },		/* BSD-specific, unfortunatly with duplicate name... */
 	{"syslog",       LOG_SYSLOG},
 	{"user",         LOG_USER},
 	{"uucp",         LOG_UUCP},
 #if defined(LOG_FTP)
 	{"ftp",          LOG_FTP},
 #endif
+#if defined(LOG_AUDIT)
+	{"audit",        LOG_AUDIT},
+#endif
+	{"console",	 (14 << 3)},		/* BSD-specific priority */
 	{"local0",       LOG_LOCAL0},
 	{"local1",       LOG_LOCAL1},
 	{"local2",       LOG_LOCAL2},
@@ -128,11 +131,11 @@ rsRetVal srUtilItoA(char *pBuf, int iLenBuf, number_t iToConv)
 
 	if(iToConv < 0)
 	{
-		bIsNegative = TRUE;
+		bIsNegative = RSTRUE;
 		iToConv *= -1;
 	}
 	else
-		bIsNegative = FALSE;
+		bIsNegative = RSFALSE;
 
 	/* first generate a string with the digits in the reverse direction */
 	i = 0;
@@ -148,7 +151,7 @@ rsRetVal srUtilItoA(char *pBuf, int iLenBuf, number_t iToConv)
 		return RS_RET_PROVIDED_BUFFER_TOO_SMALL;
 
 	/* then move it to the right direction... */
-	if(bIsNegative == TRUE)
+	if(bIsNegative == RSTRUE)
 		*pBuf++ = '-';
 	while(i >= 0)
 		*pBuf++ = szBuf[i--];
@@ -188,7 +191,7 @@ uchar *srUtilStrDup(uchar *pOld, size_t len)
  * try because otherwise we would potentially run into an endless loop.
  * loop. -- rgerhards, 2010-03-25
  */
-int makeFileParentDirs(uchar *szFile, size_t lenFile, mode_t mode,
+int makeFileParentDirs(const uchar *const szFile, size_t lenFile, mode_t mode,
 		       uid_t uid, gid_t gid, int bFailOnChownFail)
 {
         uchar *p;
@@ -526,8 +529,7 @@ char *rs_strerror_r(int errnum, char *buf, size_t buflen) {
 }
 
 
-/*  Decode a symbolic name to a numeric value
- */
+/*  Decode a symbolic name to a numeric value */
 int decodeSyslogName(uchar *name, syslogName_t *codetab)
 {
 	register syslogName_t *c;
@@ -537,22 +539,23 @@ int decodeSyslogName(uchar *name, syslogName_t *codetab)
 	ASSERT(name != NULL);
 	ASSERT(codetab != NULL);
 
-	dbgprintf("symbolic name: %s", name);
-	if (isdigit((int) *name))
-	{
-		dbgprintf("\n");
+	DBGPRINTF("symbolic name: %s", name);
+	if(isdigit((int) *name)) {
+		DBGPRINTF("\n");
 		return (atoi((char*) name));
 	}
 	strncpy((char*) buf, (char*) name, 79);
-	for (p = buf; *p; p++)
+	for(p = buf; *p; p++) {
 		if (isupper((int) *p))
 			*p = tolower((int) *p);
-	for (c = codetab; c->c_name; c++)
-		if (!strcmp((char*) buf, (char*) c->c_name))
-		{
-			dbgprintf(" ==> %d\n", c->c_val);
+	}
+	for(c = codetab; c->c_name; c++) {
+		if(!strcmp((char*) buf, (char*) c->c_name)) {
+			DBGPRINTF(" ==> %d\n", c->c_val);
 			return (c->c_val);
 		}
+	}
+	DBGPRINTF("\n");
 	return (-1);
 }
 
@@ -629,6 +632,28 @@ finalize_it:
 	RETiRet;
 }
 
+/* Returns 1 if the given string contains a non-escaped glob(3)
+ * wildcard character and 0 otherwise (or if the string is empty).
+ */
+int
+containsGlobWildcard(char *str)
+{
+	char *p;
+	if(!str) {
+		return 0;
+	}
+	/* From Linux Programmer's Guide:
+	 * "A string is a wildcard pattern if it contains one of the characters '?', '*' or '['"
+	 * "One can remove the special meaning of '?', '*' and '[' by preceding them by a backslash"
+	 */
+	for(p = str; *p != '\0'; p++) {
+		if((*p == '?' || *p == '*' || *p == '[') &&
+				(p == str || *(p-1) != '\\')) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 /* vim:set ai:
  */

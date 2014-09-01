@@ -41,7 +41,7 @@
  * deflateInit2(zstrmptr, 6, Z_DEFLATED, 31, 9, Z_DEFAULT_STRATEGY);
  * --------------------------------------------------------------------------
  * 
- * Copyright 2008, 2009 Rainer Gerhards and Adiscon GmbH.
+ * Copyright 2008-2013 Rainer Gerhards and Adiscon GmbH.
  *
  * This file is part of the rsyslog runtime library.
  *
@@ -66,11 +66,12 @@
 #define STREAM_H_INCLUDED
 
 #include <pthread.h>
+#include <stdint.h>
 #include "obj-types.h"
 #include "glbl.h"
 #include "stream.h"
 #include "zlibw.h"
-#include "apc.h"
+#include "cryprov.h"
 
 /* stream types */
 typedef enum {
@@ -113,6 +114,7 @@ typedef struct strm_s {
 	int lenDir;
 	int fd;		/* the file descriptor, -1 if closed */
 	int fdDir;	/* the directory's descriptor, in case bSync is requested (-1 if closed) */
+	ino_t inode;	/* current inode for files being monitored (undefined else) */
 	uchar *pszCurrFName; /* name of current file (if open) */
 	uchar *pIOBuf;	/* the iobuffer currently in use to gather data */
 	size_t iBufPtrMax;	/* current max Ptr in Buffer (if partial read!) */
@@ -125,25 +127,30 @@ typedef struct strm_s {
 	sbool bAsyncWrite;	/* do asynchronous writes (always if a flush interval is given) */
 	sbool bStopWriter;	/* shall writer thread terminate? */
 	sbool bDoTimedWait;	/* instruct writer thread to do a times wait to support flush timeouts */
+	sbool bzInitDone; /* did we do an init of zstrm already? */
+	sbool bVeryReliableZip; /* shall we write interim headers to create a very reliable ZIP file? */
 	int iFlushInterval; /* flush in which interval - 0, no flushing */
-	apc_id_t apcID;    /* id of current Apc request (used for cancelling) */
 	pthread_mutex_t mut;/* mutex for flush in async mode */
 	pthread_cond_t notFull;
 	pthread_cond_t notEmpty;
 	pthread_cond_t isEmpty;
 	unsigned short iEnq;	/* this MUST be unsigned as we use module arithmetic (else invalid indexing happens!) */
 	unsigned short iDeq;	/* this MUST be unsigned as we use module arithmetic (else invalid indexing happens!) */
+	cryprov_if_t *cryprov;  /* ptr to crypto provider; NULL = do not encrypt */
+	void	*cryprovData;	/* opaque data ptr for provider use */
+	void 	*cryprovFileData;/* opaque data ptr for file instance */
 	short iCnt;	/* current nbr of elements in buffer */
+	z_stream zstrm;	/* zip stream to use */
 	struct {
 		uchar *pBuf;
 		size_t lenBuf;
 	} asyncBuf[STREAM_ASYNC_NUMBUFS];
 	pthread_t writerThreadID;
-	int apcRequested;  /* is an apc Requested? */
 	/* support for omfile size-limiting commands, special counters, NOT persisted! */
 	off_t	iSizeLimit;	/* file size limit, 0 = no limit */
 	uchar	*pszSizeLimitCmd;	/* command to carry out when size limit is reached */
 	sbool	bIsTTY;		/* is this a tty file? */
+	cstr_t *prevLineSegment; /* for ReadLine, previous, unwritten part of file */
 } strm_t;
 
 
@@ -152,12 +159,11 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*Construct)(strm_t **ppThis);
 	rsRetVal (*ConstructFinalize)(strm_t *pThis);
 	rsRetVal (*Destruct)(strm_t **ppThis);
-	rsRetVal (*SetMaxFileSize)(strm_t *pThis, int64 iMaxFileSize);
 	rsRetVal (*SetFileName)(strm_t *pThis, uchar *pszName, size_t iLenName);
 	rsRetVal (*ReadChar)(strm_t *pThis, uchar *pC);
 	rsRetVal (*UnreadChar)(strm_t *pThis, uchar c);
 	rsRetVal (*SeekCurrOffs)(strm_t *pThis);
-	rsRetVal (*Write)(strm_t *pThis, uchar *pBuf, size_t lenBuf);
+	rsRetVal (*Write)(strm_t *const pThis, const uchar *const pBuf, size_t lenBuf);
 	rsRetVal (*WriteChar)(strm_t *pThis, uchar c);
 	rsRetVal (*WriteLong)(strm_t *pThis, long i);
 	rsRetVal (*SetFName)(strm_t *pThis, uchar *pszPrefix, size_t iLenPrefix);
@@ -170,7 +176,7 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	rsRetVal (*SetWCntr)(strm_t *pThis, number_t *pWCnt);
 	rsRetVal (*Dup)(strm_t *pThis, strm_t **ppNew);
 	INTERFACEpropSetMeth(strm, bDeleteOnClose, int);
-	INTERFACEpropSetMeth(strm, iMaxFileSize, int);
+	INTERFACEpropSetMeth(strm, iMaxFileSize, int64);
 	INTERFACEpropSetMeth(strm, iMaxFiles, int);
 	INTERFACEpropSetMeth(strm, iFileNumDigits, int);
 	INTERFACEpropSetMeth(strm, tOperationsMode, int);
@@ -183,12 +189,25 @@ BEGINinterface(strm) /* name must also be changed in ENDinterface macro! */
 	INTERFACEpropSetMeth(strm, iFlushInterval, int);
 	INTERFACEpropSetMeth(strm, pszSizeLimitCmd, uchar*);
 	/* v6 added */
-	rsRetVal (*ReadLine)(strm_t *pThis, cstr_t **ppCStr, int mode);
+	rsRetVal (*ReadLine)(strm_t *pThis, cstr_t **ppCStr, uint8_t mode, sbool bEscapeLF);
+	/* v7 added  2012-09-14 */
+	INTERFACEpropSetMeth(strm, bVeryReliableZip, int);
+	/* v8 added  2013-03-21 */
+	rsRetVal (*CheckFileChange)(strm_t *pThis);
+	/* v9 added  2013-04-04 */
+	INTERFACEpropSetMeth(strm, cryprov, cryprov_if_t*);
+	INTERFACEpropSetMeth(strm, cryprovData, void*);
 ENDinterface(strm)
-#define strmCURR_IF_VERSION 6 /* increment whenever you change the interface structure! */
+#define strmCURR_IF_VERSION 10 /* increment whenever you change the interface structure! */
+/* V10, 2013-09-10: added new parameter bEscapeLF, changed mode to uint8_t (rgerhards) */
 
+static inline int
+strmGetCurrFileNum(strm_t *pStrm) {
+	return pStrm->iCurrFNum;
+}
 
 /* prototypes */
 PROTOTYPEObjClassInit(strm);
+rsRetVal strmMultiFileSeek(strm_t *pThis, int fileNum, off64_t offs, off64_t *bytesDel);
 
 #endif /* #ifndef STREAM_H_INCLUDED */

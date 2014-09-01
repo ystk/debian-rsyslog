@@ -1,2 +1,2 @@
 version=3
-http://rsyslog.com/download/stable-download/ .*rsyslog-(.*)\.tar\.gz
+http://rsyslog.com/downloads/download-v8-stable/ .*/rsyslog-([\d\.]*)\.tar\.gz
