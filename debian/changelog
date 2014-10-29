@@ -1,3 +1,23 @@
+rsyslog (4.6.4-2+deb6u2) squeeze-lts; urgency=high
+
+  * Non-maintainer upload by the Squeeze LTS Team
+  * take care of missing symbol, introduced in latest version
+
+ -- Thorsten Alteholz <debian@alteholz.de>  Mon, 20 Oct 2014 09:59:57 +0200
+
+rsyslog (4.6.4-2+deb6u1) squeeze-lts; urgency=high
+
+  * Non-maintainer upload by the Squeeze LTS Team
+  * debian/patches/05-pri-vulnerability-fix.patch:
+    - CVE-2014-3683: Followup fix for CVE-2014-3634. The initial patch was
+      incomplete. It did not cover cases where PRI values > MAX_INT caused
+      integer overflows resulting in negative values.
+  * debian/patches/05-pri-vulnerability-fix.patch:
+    - CVE-2014-3634: Fix remote syslog vulnerability due to improper handling
+      of invalid PRI values.
+
+ -- Thorsten Alteholz <debian@alteholz.de>  Sun, 19 Oct 2014 16:59:57 +0200
+
 rsyslog (4.6.4-2) unstable; urgency=low
 
   * debian/patches/02-tls_loop_fix.patch
