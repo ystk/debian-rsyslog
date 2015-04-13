@@ -1,3 +1,23 @@
+rsyslog (8.4.2-1) unstable; urgency=high
+
+  * New upstream release.
+    - CVE-2014-3683: The fix for CVE-2014-3634 incomplete. It did not cover
+      cases where PRI values > MAX_INT caused integer overflows resulting in
+      negative values.
+  * Urgency high for the security fix.
+
+ -- Michael Biebl <biebl@debian.org>  Thu, 02 Oct 2014 15:27:25 +0200
+
+rsyslog (8.4.1-1) unstable; urgency=high
+
+  * New upstream release.
+    - CVE-2014-3634: Fix remote syslog vulnerability due to improper
+      handling of invalid PRI values.
+  * Drop patches which have been merged upstream.
+  * Urgency high for the security fix.
+
+ -- Michael Biebl <biebl@debian.org>  Tue, 30 Sep 2014 12:35:33 +0200
+
 rsyslog (8.4.0-2) unstable; urgency=medium
 
   * Tweak rsyslog systemd service file. Add Documentation field and restart

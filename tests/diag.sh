@@ -22,6 +22,7 @@ case $1 in
 		rm -rf test-spool test-logdir stat-file1
 		rm -f rsyslog.out.*.log work-presort rsyslog.pipe
 		rm -f rsyslog.input rsyslog.empty
+		rm -f rsyslog.errorfile
 		rm -f core.* vgcore.*
 		# Note: rsyslog.action.*.include must NOT be deleted, as it
 		# is used to setup some parameters BEFORE calling init. This
@@ -35,7 +36,19 @@ case $1 in
 		rm -rf test-spool test-logdir stat-file1
 		rm -f rsyslog.out.*.log rsyslog.random.data work-presort rsyslog.pipe
 		rm -f rsyslog.input rsyslog.conf.tlscert stat-file1 rsyslog.empty
+		rm -f rsyslog.errorfile
 		echo  -------------------------------------------------------------------------------
+		;;
+   'es-init')   # initialize local Elasticsearch *testbench* instance for the next
+                # test. NOTE: do NOT put anything useful on that instance!
+		curl -XDELETE localhost:9200/rsyslog_testbench
+		;;
+   'es-getdata') # read data from ES to a local file so that we can process
+   		# it with out regular tooling.
+		# Note: param 2 MUST be number of records to read (ES does
+		# not return the full set unless you tell it explicitely).
+		curl localhost:9200/rsyslog_testbench/_search?size=$2 > work
+		python $srcdir/es_response_get_msgnum.py > rsyslog.out.log
 		;;
    'startup')   # start rsyslogd with default params. $2 is the config file name to use
    		# returns only after successful startup, $3 is the instance (blank or 2!)

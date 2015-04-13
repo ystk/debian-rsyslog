@@ -376,8 +376,8 @@ static rsRetVal enqLine(fileInfo_t *pInfo, cstr_t *cstrLine)
 	MsgSetMSGoffs(pMsg, 0);	/* we do not have a header... */
 	MsgSetHOSTNAME(pMsg, glbl.GetLocalHostName(), ustrlen(glbl.GetLocalHostName()));
 	MsgSetTAG(pMsg, pInfo->pszTag, pInfo->lenTag);
-	pMsg->iFacility = LOG_FAC(pInfo->iFacility);
-	pMsg->iSeverity = LOG_PRI(pInfo->iSeverity);
+	pMsg->iFacility = pri2fac(pInfo->iFacility);
+	pMsg->iSeverity = pri2sev(pInfo->iSeverity);
 	MsgSetRuleset(pMsg, pInfo->pRuleset);
 	ratelimitAddMsg(pInfo->ratelimiter, &pInfo->multiSub, pMsg);
 finalize_it:
@@ -422,6 +422,18 @@ openFile(fileInfo_t *pThis)
 
 	/* read back in the object */
 	CHKiRet(obj.Deserialize(&pThis->pStrm, (uchar*) "strm", psSF, NULL, pThis));
+	DBGPRINTF("imfile: deserialized state file, state file base name '%s', "
+		  "configured base name '%s'\n", pThis->pStrm->pszFName,
+		  pThis->pszFileName);
+	if(ustrcmp(pThis->pStrm->pszFName, pThis->pszFileName)) {
+		errmsg.LogError(0, RS_RET_STATEFILE_WRONG_FNAME, "imfile: state file '%s' "
+				"contains file name '%s', but is used for file '%s'. State "
+				"file deleted, starting from begin of file.",
+				pszSFNam, pThis->pStrm->pszFName, pThis->pszFileName);
+
+		unlink((char*)pszSFNam);
+		ABORT_FINALIZE(RS_RET_STATEFILE_WRONG_FNAME);
+	}
 
 	strm.CheckFileChange(pThis->pStrm);
 	CHKiRet(strm.SeekCurrOffs(pThis->pStrm));

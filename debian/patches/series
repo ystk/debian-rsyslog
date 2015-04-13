@@ -1,3 +1,1 @@
 0001-Don-t-create-a-database.patch
-0002-systemd-service-file-tweaks.patch
-0003-fix-build-problem-on-platforms-without-atomic-instru.patch
