@@ -1,4 +1,50 @@
 ---------------------------------------------------------------------------
+Version 8.4.2 [v8-stable] 2014-10-02
+- bugfix: the fix for CVE-2014-3634 did not handle all cases
+  This is corrected now.
+  see also: CVE-2014-3683
+- fixed a build problem on some platforms
+  Thanks to Olaf for the patch
+- behaviour change: "msg" of messages with invalid PRI set to "rawmsg"
+  When the PRI is invalid, the rest of the header cannot be valid. So
+  we move all of it to MSG and do not try to parse it out. Note that
+  this is not directly related to the security issue but rather done
+  because it makes most sense.
+---------------------------------------------------------------------------
+Version 8.4.1 [v8-stable] 2014-09-30
+- imudp: add for bracketing mode, which makes parsing stats easier
+- permit at-sign in variable names
+  closes: https://github.com/rsyslog/rsyslog/issues/110
+- bugfix: fix syntax error in anon_cc_numbers.py script
+  Thanks to github user anthcourtney for the patch.
+  closes: https://github.com/rsyslog/rsyslog/issues/109
+- bugfix: ompgsql: don't loose uncomitted data on retry
+  Thanks to Jared Johnson and Axel Rau for the patch.
+- bugfix: imfile: if a state file for a different file name was set,
+  that different file (name) was monitored instead of the configured
+  one. Now, the state file is deleted and the correct file monitored.
+  closes: https://github.com/rsyslog/rsyslog/issues/103
+- bugfix: omudpspoof: source port was invalid
+  Thanks to Pavel Levshin for the patch
+- bugfix: build failure on systems which don't have json_tokener_errors
+  Older versions of json-c need to use a different API (which don't exists
+  on newer versions, unfortunately...)
+  Thanks to Thomas D. for reporting this problem.
+- bugfix: omelasticsearch does not work with broken/changed ES 1.0+ API
+  closes: https://github.com/rsyslog/rsyslog/issues/104
+- bugfix: mmanon did not properly anonymize IP addresses starting with '9'
+  Thanks to defa-at-so36.net for reporting this problem.
+  closes: http://bugzilla.adiscon.com/show_bug.cgi?id=529
+- bugfix: build problems on SuSe Linux
+  Thanks Andreas Stieger for the patch
+- bugfix: omelasticsearch error file did not work correctly on ES 1.0+
+  due to a breaking change in the ElasticSearch API.
+  see also: https://github.com/rsyslog/rsyslog/issues/104
+- bugfix: potential abort when a message with PRI > 191 was processed
+  if the "pri-text" property was used in active templates, this could
+  be abused to a remote denial of service from permitted senders
+  see also: CVE-2014-3634
+---------------------------------------------------------------------------
 Version 8.4.0 [v8-stable] 2014-08-18
 - this is the new stable branch, which incorporates all enhancements of
   rsyslog 8.3.
@@ -388,7 +434,36 @@ Version 8.1.0 [experimental] 2013-11-15
   statement. Also, it can still be build without problems, the option must
   just explicitely be given.
 ---------------------------------------------------------------------------
-Version 7.6.4 [v7.6-stable] 2014-03-??
+Version 7.6.7 [v7.6-stable] 2014-10-02
+- bugfix: the fix for CVE-2014-3634 did not handle all cases
+  This is corrected now.
+  see also: CVE-2014-3683
+- fixed a build problem on some platforms
+  Thanks to Olaf for the patch
+- behaviour change: "msg" of messages with invalid PRI set to "rawmsg"
+  When the PRI is invalid, the rest of the header cannot be valid. So
+  we move all of it to MSG and do not try to parse it out. Note that
+  this is not directly related to the security issue but rather done
+  because it makes most sense.
+---------------------------------------------------------------------------
+Version 7.6.6 [v7.6-stable] 2014-09-30
+- bugfix: potential abort when a message with PRI > 191 was processed
+  if the "pri-text" property was used in active templates, this could
+  be abused to a remote denial of service from permitted senders
+  see also: CVE-2014-3634
+- bugfix: potential segfault on startup on 64 bit systems
+  This happened immediately on startup during config processing. Once
+  rsyslog got past this stage, it could not happen.
+- bugfix: build problems on SuSe Linux
+  Thanks Andreas Stieger for the patch
+---------------------------------------------------------------------------
+Version 7.6.5 [v7.6-stable] 2014-09-17
+- bugfix: in 7.6.4, pri-based filters did not work correctly
+  messages were distributed to the wrong bins.
+- bugfix: build problems on systems without atomic instructons
+  e.g. RHEL 5; backport from v8
+---------------------------------------------------------------------------
+Version 7.6.4 [v7.6-stable] 2014-09-12
 - add --enable-generate-man-pages configure switch (default: enabled)
   This forces generation of man pages, even if cached ones exists. This
   "fixes" a typical release tarball nit. While it is hackish, the
@@ -417,6 +492,10 @@ Version 7.6.4 [v7.6-stable] 2014-03-??
   * dirgroupnum
   Thanks to Karol Jurak for the patch.
 - bugfix: memory leak in TCP TLS mode
+- bugfix: imfile: if a state file for a different file name was set,
+  that different file (name) was monitored instead of the configured
+  one. Now, the state file is deleted and the correct file monitored.
+  closes: https://github.com/rsyslog/rsyslog/issues/103
 - bugfix: using UUID property could cause segfault
 - bugfix: mmutf8fix did not detect two invalid sequences
   Thanks to Axel Rau for the patch.
@@ -450,6 +529,13 @@ Version 7.6.4 [v7.6-stable] 2014-03-??
   shut down before the repetition was broken.
   Thanks to Tomas Heinrich for the patch.
 - bugfix: make dist failed when GUARDTIME or LIBGCRYPT feature was disabled
+- bugfix: mmjsonparse did not build with json-c < 0.10
+  This was a regression introduced some time in the past in order to
+  support API changes in json-c. Now we check for the version and use
+  proper code.
+- bugfix: mmanon did not properly anonymize IP addresses starting with '9'
+  Thanks to defa-at-so36.net for reporting this problem.
+  closes: http://bugzilla.adiscon.com/show_bug.cgi?id=529
 ---------------------------------------------------------------------------
 Version 7.6.3 [v7.6-stable] 2014-03-27
 - add capability to override GnuTLS path in build process
@@ -4513,6 +4599,8 @@ Version 3.22.4 [v3-stable] (rgerhards), 2010-??-??
   closes: http://bugzilla.adiscon.com/show_bug.cgi?id=271
 - improved some code based on clang static analyzer results
 - bugfix: potential misadressing in property replacer
+- bugfix: improper handling of invalid PRI values
+  references: CVE-2014-3634
 ---------------------------------------------------------------------------
 Version 3.22.3 [v3-stable] (rgerhards), 2010-11-24
 - bugfix(important): problem in TLS handling could cause rsyslog to loop

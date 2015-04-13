@@ -49,11 +49,21 @@ host_triplet = @host@
 @ENABLE_TESTBENCH_TRUE@	$(am__append_9) $(am__append_10) \
 @ENABLE_TESTBENCH_TRUE@	$(am__append_11) $(am__append_12) \
 @ENABLE_TESTBENCH_TRUE@	$(am__append_13) $(am__append_14) \
-@ENABLE_TESTBENCH_TRUE@	$(am__append_15) $(am__append_16)
+@ENABLE_TESTBENCH_TRUE@	$(am__append_15) $(am__append_16) \
+@ENABLE_TESTBENCH_TRUE@	$(am__append_17)
 #TESTS = $(TESTRUNS) cfg.sh
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_1 = \
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	stop-localvar.sh \
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	stop-msgvar.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@        fac_authpriv.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_local0.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_mail.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_news.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_uucp.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_invld1.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_invld2.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_invld3.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	fac_invld4_rfc5424.sh \
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	rfc5424parser.sh \
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	arrayqueue.sh \
 @ENABLE_IMDIAG_TRUE@@ENABLE_TESTBENCH_TRUE@	global_vars.sh \
@@ -164,10 +174,18 @@ host_triplet = @host@
 @ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	imptcp_addtlframedelim.sh \
 @ENABLE_IMPTCP_TRUE@@ENABLE_TESTBENCH_TRUE@	imptcp_conndrop.sh 
 
-@ENABLE_MMPSTRUCDATA_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_7 = \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_7 = \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-basic.sh \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-basic-bulk.sh \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-basic-errorfile-empty.sh \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-basic-errorfile-populated.sh \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-bulk-errorfile-empty.sh \
+@ENABLE_ELASTICSEARCH_TRUE@@ENABLE_TESTBENCH_TRUE@	elasticsearch-bulk-errorfile-populated.sh
+
+@ENABLE_MMPSTRUCDATA_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_8 = \
 @ENABLE_MMPSTRUCDATA_TRUE@@ENABLE_TESTBENCH_TRUE@	mmpstrucdata.sh
 
-@ENABLE_MMJSONPARSE_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_8 = \
+@ENABLE_MMJSONPARSE_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_9 = \
 @ENABLE_MMJSONPARSE_TRUE@@ENABLE_TESTBENCH_TRUE@	mmjsonparse_simple.sh \
 @ENABLE_MMJSONPARSE_TRUE@@ENABLE_TESTBENCH_TRUE@	mmjsonparse_cim.sh
 
@@ -177,15 +195,15 @@ host_triplet = @host@
 #	#sndrcv_tls_anon.sh \
 #	#sndrcv_tls_anon_rebind.sh \
 #	#imtcp-tls-basic.sh
-@ENABLE_GNUTLS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_9 = imtcp-tls-basic-vg.sh \
+@ENABLE_GNUTLS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_10 = imtcp-tls-basic-vg.sh \
 @ENABLE_GNUTLS_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@	 imtcp_conndrop_tls-vg.sh 
 
-@ENABLE_OMUXSOCK_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_10 = uxsock_simple.sh
-@ENABLE_RELP_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_11 = sndrcv_relp.sh
-@ENABLE_OMUDPSPOOF_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_12 = sndrcv_omudpspoof.sh \
+@ENABLE_OMUXSOCK_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_11 = uxsock_simple.sh
+@ENABLE_RELP_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_12 = sndrcv_relp.sh
+@ENABLE_OMUDPSPOOF_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_13 = sndrcv_omudpspoof.sh \
 @ENABLE_OMUDPSPOOF_TRUE@@ENABLE_TESTBENCH_TRUE@	 sndrcv_omudpspoof_nonstdpt.sh
 
-@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_13 = omod-if-array.sh \
+@ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_14 = omod-if-array.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 proprepltest.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 parsertest.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 timestamp.sh \
@@ -197,16 +215,16 @@ host_triplet = @host@
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 tabescape_off.sh \
 @ENABLE_OMSTDOUT_TRUE@@ENABLE_TESTBENCH_TRUE@	 fieldtest.sh
 
-@ENABLE_IMDIAG_TRUE@@ENABLE_OMRULESET_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_14 = omruleset.sh \
+@ENABLE_IMDIAG_TRUE@@ENABLE_OMRULESET_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_15 = omruleset.sh \
 @ENABLE_IMDIAG_TRUE@@ENABLE_OMRULESET_TRUE@@ENABLE_TESTBENCH_TRUE@	 omruleset-queue.sh
 
 
 # random.sh is temporarily disabled as it needs some work
 # to rsyslog core to complete in reasonable time
 #TESTS += random.sh 
-@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_15 = imfile-basic.sh
-@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_16 = imfile-basic-vg.sh
-@ENABLE_GNUTLS_TRUE@am__append_17 = -lgcrypt
+@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@am__append_16 = imfile-basic.sh
+@ENABLE_IMFILE_TRUE@@ENABLE_TESTBENCH_TRUE@@HAVE_VALGRIND_TRUE@am__append_17 = imfile-basic-vg.sh
+@ENABLE_GNUTLS_TRUE@am__append_18 = -lgcrypt
 subdir = tests
 DIST_COMMON = README $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -629,6 +647,24 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   testsuites/global_vars.conf \
 	   rfc5424parser.sh \
 	   testsuites/rfc5424parser.conf \
+	   fac_authpriv.sh \
+	   testsuites/fac_authpriv.conf \
+	   fac_local0.sh \
+	   testsuites/fac_local0.conf \
+	   fac_mail.sh \
+	   testsuites/fac_mail.conf \
+	   fac_news.sh \
+	   testsuites/fac_news.conf \
+	   fac_uucp.sh \
+	   testsuites/fac_uucp.conf \
+	   fac_invld1.sh \
+	   testsuites/fac_invld1.conf \
+	   fac_invld2.sh \
+	   testsuites/fac_invld2.conf \
+	   fac_invld3.sh \
+	   testsuites/fac_invld3.conf \
+	   fac_invld4_rfc5424.sh \
+	   testsuites/fac_invld4_rfc5424.conf \
 	   rs_optimizer_pri.sh \
 	   testsuites/rs_optimizer_pri.conf \
 	   rscript_prifilt.sh \
@@ -654,6 +690,18 @@ EXTRA_DIST = 1.rstest 2.rstest 3.rstest err1.rstest \
 	   incltest_dir_wildcard.sh \
 	   testsuites/incltest_dir_wildcard.conf \
 	   testsuites/incltest.d/include.conf \
+	   elasticsearch-basic.sh \
+	   testsuites/elasticsearch-basic.conf \
+	   elasticsearch-basic-bulk.sh \
+	   testsuites/elasticsearch-basic-bulk.conf \
+	   elasticsearch-basic-errorfile-empty.sh \
+	   testsuites/elasticsearch-basic-errorfile-empty.conf \
+	   elasticsearch-basic-errorfile-populated.sh \
+	   testsuites/elasticsearch-basic-errorfile-populated.conf \
+	   elasticsearch-bulk-errorfile-empty.sh \
+	   testsuites/elasticsearch-bulk-errorfile-empty.conf \
+	   elasticsearch-bulk-errorfile-populated.sh \
+	   testsuites/elasticsearch-bulk-errorfile-populated.conf \
 	   linkedlistqueue.sh \
 	   testsuites/linkedlistqueue.conf \
 	   da-mainmsg-q.sh \
@@ -889,7 +937,7 @@ uxsockrcvr_LDADD = $(SOL_LIBS)
 tcpflood_SOURCES = tcpflood.c
 tcpflood_CPPFLAGS = $(PTHREADS_CFLAGS) $(GNUTLS_CFLAGS)
 tcpflood_LDADD = $(SOL_LIBS) $(PTHREADS_LIBS) $(GNUTLS_LIBS) \
-	$(am__append_17)
+	$(am__append_18)
 minitcpsrv_SOURCES = minitcpsrvr.c
 minitcpsrv_LDADD = $(SOL_LIBS)
 syslog_caller_SOURCES = syslog_caller.c

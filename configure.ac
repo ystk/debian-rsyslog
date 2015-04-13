@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ(2.61)
-AC_INIT([rsyslog],[8.4.0],[rsyslog@lists.adiscon.com])
+AC_INIT([rsyslog],[8.4.2],[rsyslog@lists.adiscon.com])
 AM_INIT_AUTOMAKE([subdir-objects])
 
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
@@ -32,13 +32,15 @@ PKG_PROG_PKG_CONFIG
 PKG_CHECK_MODULES(LIBESTR, libestr >= 0.1.9)
 PKG_CHECK_MODULES(LIBLOGGING_STDLOG, liblogging-stdlog >= 1.0.3)
 PKG_CHECK_MODULES([JSON_C], [json],, [
-	PKG_CHECK_MODULES([JSON_C], [json-c],
-	       [AC_DEFINE([HAVE_JSON_TOKENER_ERROR_DESC], [1], [we have the newer JSON-C API])])
+	PKG_CHECK_MODULES([JSON_C], [json-c],,)
 ])
 
 # if int64 is supported, use it
 AC_CHECK_LIB(json-c, json_object_new_object,,)
 AC_CHECK_FUNCS(json_object_new_int64,,)
+
+# look for newer API
+AC_CHECK_FUNCS(json_tokener_error_desc,,)
 
 case "${host}" in
   *-*-linux*)
@@ -88,7 +90,7 @@ AC_SUBST(DL_LIBS)
 AC_HEADER_RESOLV
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS([arpa/inet.h libgen.h malloc.h fcntl.h locale.h netdb.h netinet/in.h paths.h stddef.h stdlib.h string.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h sys/stat.h sys/inotify.h syslog.h unistd.h utmp.h utmpx.h sys/epoll.h sys/prctl.h])
+AC_CHECK_HEADERS([arpa/inet.h libgen.h malloc.h fcntl.h locale.h netdb.h netinet/in.h paths.h stddef.h stdlib.h string.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h sys/stat.h sys/inotify.h unistd.h utmp.h utmpx.h sys/epoll.h sys/prctl.h])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST
