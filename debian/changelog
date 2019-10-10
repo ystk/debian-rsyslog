@@ -1,3 +1,12 @@
+rsyslog (8.4.2-1+deb8u3) jessie-security; urgency=high
+
+  * CVE-2019-17041: Fix a heap overflow in the AIX message parser.
+    (Closes: #942067)
+  * CVE-2019-17042: Fix a heap overflow in the Cisco log message parser.
+    (Closes: #942065)
+
+ -- Chris Lamb <lamby@debian.org>  Wed, 09 Oct 2019 17:04:42 -0700
+
 rsyslog (8.4.2-1+deb8u2) jessie; urgency=medium
 
   * Fix crash in imfile module when using inotify mode.

@@ -2,3 +2,5 @@
 0002-bugfix-ompgsql-transaction-were-improperly-handled.patch
 0003-bugfix-imfile-segfault-on-startup-in-inotify-mode.patch
 0004-Prevent-a-segfault-in-dynafile-creation.patch
+CVE-2019-17041.patch
+CVE-2019-17042.patch
